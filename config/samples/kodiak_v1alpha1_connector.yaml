@@ -1,0 +1,9 @@
+apiVersion: kodiak.mnicloud.jp/v1alpha1
+kind: Connector
+metadata:
+  labels:
+    app.kubernetes.io/name: kodiak
+    app.kubernetes.io/managed-by: kustomize
+  name: connector-sample
+spec:
+  # TODO(user): Add fields here
