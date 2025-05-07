@@ -128,6 +128,11 @@ type ConnectorStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="STATUS",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The status of the connector"
+// +kubebuilder:printcolumn:name="TAILSCALE-IP",type="string",JSONPath=".status.tailscaleIp",description="Assigned Tailscale IP"
+// +kubebuilder:printcolumn:name="NODE-ID",type="string",JSONPath=".status.nodeId",description="Tailscale node ID"
+// +kubebuilder:printcolumn:name="ROUTES",type="string",JSONPath=".status.advertisedRoutes",description="Advertised routes"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 
 // Connector is the Schema for the connectors API.
 type Connector struct {
