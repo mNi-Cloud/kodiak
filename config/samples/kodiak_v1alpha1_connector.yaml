@@ -6,4 +6,44 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: connector-sample
 spec:
-  # TODO(user): Add fields here
+  # Optional dependency configuration
+  # dependsOn:
+  #   name: some-dependency
+  #   namespace: default
+  spec:
+    tailscale:
+      # Required: Tailscale auth key for authentication
+      # Note: This is a placeholder - replace with valid key from ionscale.munenick.me
+      authKey: "some-valid-auth-key"
+      
+      # Optional: Tailscale image version (defaults to "stable")
+      version: "stable"
+      
+      # Optional: Control server URL for using Headscale or other self-hosted control server
+      # Example: "https://ionscale.example.com"
+      controlServerUrl: "https://ionscale.example.com"
+      
+      # Required: Networks to advertise (CIDR format)
+      advertiseRoutes: 
+        - "10.0.0.0/24"
+        - "192.168.1.0/24"
+      
+      # Optional: Enable USERSPACE networking mode (defaults to true)
+      # This is the default mode and is specified in the requirements
+      userspaceNetworking: true
+      
+      # Optional: Hostname for the Tailscale node
+      hostname: "k8s-connector"
+      
+      # Optional: Accept DNS configuration from Tailscale network (defaults to false)
+      acceptDns: false
+    
+    # Optional: Resource requirements for the Tailscale container
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "200m"
+        memory: "256Mi"
+

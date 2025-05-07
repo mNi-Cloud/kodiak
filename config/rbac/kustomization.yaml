@@ -25,4 +25,8 @@ resources:
 - connector_admin_role.yaml
 - connector_editor_role.yaml
 - connector_viewer_role.yaml
+# The following RBAC configurations are for the Tailscale connector
+- tailscale_service_account.yaml
+- tailscale_role.yaml
+- tailscale_role_binding.yaml
 
