@@ -39,6 +39,7 @@ import (
 
 	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
 	"github.com/mNi-Cloud/kodiak/internal/controller"
+	"k8s.io/client-go/kubernetes"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -202,9 +203,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Kubernetes clientsetを作成
+	config := ctrl.GetConfigOrDie()
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		setupLog.Error(err, "unable to create kubernetes clientset")
+		os.Exit(1)
+	}
+
 	if err = (&controller.ConnectorReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		RESTClient: clientset.CoreV1().RESTClient(),
+		Config:     config,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Connector")
 		os.Exit(1)
