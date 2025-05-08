@@ -35,7 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -105,29 +105,29 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				return ctrl.Result{}, err
 			}
 
-			// ファイナライザーを削除する前に、最新のリソースを再取得
+			 // Retrieve the latest resource state before removing finalizer
 			var latestResource v1alpha1.Connector
 			if err := r.Get(ctx, req.NamespacedName, &latestResource); err != nil {
 				if errors.IsNotFound(err) {
-					// すでに削除されている場合は何もしない
+					 // Do nothing if resource is already deleted
 					logger.Info("Resource already deleted, skipping finalizer removal")
 					return ctrl.Result{}, nil
 				}
 				logger.Error(err, "Failed to get latest resource state for finalizer removal")
 				return ctrl.Result{}, err
-			}
+			 }
 
-			// 最新のリソースにファイナライザーが存在する場合のみ削除を試みる
+			 // Only attempt to remove finalizer if it exists in the latest resource
 			if controllerutil.ContainsFinalizer(&latestResource, finalizer) {
 				controllerutil.RemoveFinalizer(&latestResource, finalizer)
 				if err := r.Update(ctx, &latestResource); err != nil {
-					// UID競合や他のエラーが発生した場合、詳細をログに記録
+					 // Log details in case of UID conflict or other errors
 					logger.Error(err, "Failed to remove finalizer",
 						"resourceUID", latestResource.UID,
 						"resourceVersion", latestResource.ResourceVersion)
 
 					if errors.IsConflict(err) {
-						// 競合が発生した場合は再試行させる
+						 // Retry if conflict occurred
 						logger.Info("Conflict detected when removing finalizer, will retry")
 						return ctrl.Result{Requeue: true}, nil
 					}
@@ -140,7 +140,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Ensure finalizer
-	if !controllerutil.ContainsFinalizer(&resource, finalizer) {
+	if (!controllerutil.ContainsFinalizer(&resource, finalizer)) {
 		controllerutil.AddFinalizer(&resource, finalizer)
 		if err := r.Update(ctx, &resource); err != nil {
 			logger.Error(err, "Failed to add finalizer")
@@ -229,7 +229,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			r.setCondition(&resource, conditionTypeReady, metav1.ConditionTrue,
 				reasonTailscaleConnected, "Connector is ready")
 
-			// 実際のステータスフィールドを設定
+			 // Set the actual status fields
 			resource.Status.NodeID = status.NodeID
 			resource.Status.TailscaleIP = status.IP
 			resource.Status.AdvertisedRoutes = status.AdvertisedRoutes
@@ -258,7 +258,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		logger.Error(err, "Unable to update Connector status",
 			"resourceVersion", resource.ResourceVersion)
 
-		// Status update失敗時も再キューする
+		 // Requeue on status update failure
 		return ctrl.Result{Requeue: true}, nil
 	}
 
@@ -323,7 +323,7 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 		return ctrl.Result{}, err
 	}
 
-	// このデプロイメントに対応するPodが実行中（Running）かどうかチェック
+	// Check if Pod corresponding to this deployment is running
 	podList := &corev1.PodList{}
 	listOpts := []client.ListOption{
 		client.InNamespace(cr.Namespace),
@@ -340,9 +340,9 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 		}
 	}
 
-	// 実行中のPodが存在し、かつDeploymentがReadyReplicasを持っている場合は更新不要
+	// If a running Pod exists and the Deployment has ReadyReplicas, no update is needed
 	if podRunning && found.Status.ReadyReplicas > 0 {
-		// デプロイメントが既に作成されており、Podも実行中なので何もしない
+		// Deployment already exists and a pod is running, so do nothing
 		logger.Info("Deployment already exists with running pod",
 			"Name", found.Name,
 			"ReadyReplicas", found.Status.ReadyReplicas)
@@ -383,11 +383,11 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 	// Check if Deployment has any replicas ready
 	if found.Status.ReadyReplicas > 0 {
 		logger.Info("Deployment has ready replicas", "ReadyReplicas", found.Status.ReadyReplicas)
-		// デプロイメントが少なくとも1つのレプリカを準備完了している場合は続行
+		 // Continue if the deployment has at least one ready replica
 		return ctrl.Result{}, nil
 	}
 
-	// 5秒後に再キューして再確認
+	// Requeue after 5 seconds to check again
 	logger.Info("Waiting for Deployment to have ready replicas", "ReadyReplicas", found.Status.ReadyReplicas,
 		"DesiredReplicas", *found.Spec.Replicas)
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -518,7 +518,7 @@ func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector) *ap
 			Namespace: cr.Namespace,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: pointer.Int32(1),
+			Replicas: ptr.To(int32(1)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: labels,
 			},
@@ -548,59 +548,6 @@ func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector) *ap
 	}
 
 	return deploy
-}
-
-// isDeploymentReady checks if the Deployment for the connector is ready
-func (r *ConnectorReconciler) isDeploymentReady(ctx context.Context, cr *v1alpha1.Connector) bool {
-	logger := log.FromContext(ctx)
-
-	// 1. Check if the Deployment exists and is ready
-	deployment := &appsv1.Deployment{}
-	err := r.Get(ctx, types.NamespacedName{
-		Name:      cr.Name + deploymentNameSuffix,
-		Namespace: cr.Namespace,
-	}, deployment)
-
-	if err != nil {
-		logger.Error(err, "Failed to get deployment")
-		return false
-	}
-
-	if deployment.Status.ReadyReplicas != *deployment.Spec.Replicas {
-		logger.Info("Deployment not ready yet",
-			"Ready", deployment.Status.ReadyReplicas,
-			"Expected", *deployment.Spec.Replicas)
-		return false
-	}
-
-	// 2. Check if any Pod is running for this Deployment
-	podList := &corev1.PodList{}
-	listOpts := []client.ListOption{
-		client.InNamespace(cr.Namespace),
-		client.MatchingLabels(map[string]string{"app": cr.Name + "-connector"}),
-	}
-
-	if err := r.List(ctx, podList, listOpts...); err != nil {
-		logger.Error(err, "Failed to list pods")
-		return false
-	}
-
-	if len(podList.Items) == 0 {
-		logger.Info("No pods found for connector")
-		return false
-	}
-
-	// Check if at least one pod is running
-	for _, pod := range podList.Items {
-		if pod.Status.Phase == corev1.PodRunning {
-			// Found at least one running pod
-			logger.Info("Deployment is ready with running pod", "pod", pod.Name)
-			return true
-		}
-	}
-
-	logger.Info("No running pods found for connector")
-	return false
 }
 
 // setCondition updates the condition in the status
@@ -640,7 +587,7 @@ type TailscaleStatus struct {
 	AdvertisedRoutes []string
 }
 
-// TailscaleStatusJSON は、tailscale status --json の出力を表します
+// TailscaleStatusJSON represents the output of the 'tailscale status --json' command
 type TailscaleStatusJSON struct {
 	TailscaleIPs []string `json:"TailscaleIPs"`
 	Self         struct {
@@ -656,7 +603,7 @@ type TailscaleStatusJSON struct {
 	Peer map[string]interface{} `json:"Peer"`
 }
 
-// execCommandInPod はPod内でコマンドを実行し、結果を返します
+// execCommandInPod executes a command in a pod and returns the results
 func (r *ConnectorReconciler) execCommandInPod(ctx context.Context, podName, namespace, containerName string, command ...string) (string, string, error) {
 	req := r.RESTClient.Post().
 		Resource("pods").
@@ -690,7 +637,7 @@ func (r *ConnectorReconciler) execCommandInPod(ctx context.Context, podName, nam
 		return "", "", fmt.Errorf("error creating executor: %v", err)
 	}
 
-	err = exec.Stream(remotecommand.StreamOptions{
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
@@ -704,7 +651,7 @@ func (r *ConnectorReconciler) execCommandInPod(ctx context.Context, podName, nam
 			"stdout_length", stdout.Len(),
 			"stderr_length", stderr.Len())
 
-		// デバッグのために出力の一部を表示
+		 // Display part of output for debugging
 		outStr := stdout.String()
 		if len(outStr) > 100 {
 			logger.Info("Command output preview", "preview", outStr[:100]+"...")
@@ -733,14 +680,14 @@ func (r *ConnectorReconciler) getTailscaleStatus(ctx context.Context, cr *v1alph
 	}
 
 	if len(podList.Items) == 0 {
-		// ラベルでPodが見つからない場合、デバッグ目的でラベルなしで検索
+		 // If pod not found by label, search without labels for debugging purposes
 		allPods := &corev1.PodList{}
 		if err := r.List(ctx, allPods, client.InNamespace(cr.Namespace)); err == nil {
 			logger.Info("Checking all pods in namespace",
 				"namespace", cr.Namespace,
 				"pod_count", len(allPods.Items))
 
-			// 各Podのラベルをログに出力して問題を特定
+			 // Log labels of each pod to identify the issue
 			for _, pod := range allPods.Items {
 				if strings.Contains(pod.Name, "connector") {
 					labels := make([]string, 0, len(pod.Labels))
@@ -784,7 +731,7 @@ func (r *ConnectorReconciler) getTailscaleStatus(ctx context.Context, cr *v1alph
 		"podIP", runningPod.Status.PodIP,
 		"containers", getContainerNames(runningPod))
 
-	// Tailscaleコンテナ内で "tailscale status --json" コマンドを実行
+	// Execute "tailscale status --json" command inside the Tailscale container
 	stdout, stderr, err := r.execCommandInPod(ctx, runningPod.Name, runningPod.Namespace, "tailscale", "tailscale", "status", "--json")
 	if err != nil {
 		logger.Error(err, "Failed to execute tailscale status command",
@@ -810,10 +757,10 @@ func (r *ConnectorReconciler) getTailscaleStatus(ctx context.Context, cr *v1alph
 		}, nil
 	}
 
-	// デバッグのために完全なJSON出力をログに記録
+	// Log the full JSON output for debugging
 	logger.Info("Raw tailscale status JSON output", "json", stdout)
 
-	// JSONをパース
+	// Parse the JSON
 	var tsStatus TailscaleStatusJSON
 	if err := json.Unmarshal([]byte(stdout), &tsStatus); err != nil {
 		logger.Error(err, "Failed to parse tailscale status JSON", "output", stdout)
@@ -825,32 +772,32 @@ func (r *ConnectorReconciler) getTailscaleStatus(ctx context.Context, cr *v1alph
 		}, fmt.Errorf("failed to parse tailscale status output: %w", err)
 	}
 
-	// コンテナから実際のTailscale IPを取得
+	// Get the actual Tailscale IP from the container
 	tailscaleIP := ""
 	if len(tsStatus.TailscaleIPs) > 0 {
 		tailscaleIP = tsStatus.TailscaleIPs[0]
 		logger.Info("Retrieved Tailscale IP from container", "ip", tailscaleIP)
 	} else {
-		// IPが取得できない場合は空白にする
+		// If no IP is found, use an empty string
 		tailscaleIP = ""
 		logger.Info("No Tailscale IPs found in status output - using empty string")
 	}
 
-	// Self.IDをNodeIDとして使用
+	// Use Self.ID as NodeID
 	nodeID := tsStatus.Self.ID
 	if nodeID == "" {
-		// フォールバックとしてDNS名を使用
+		// Fallback to DNS name
 		nodeID = tsStatus.Self.DNSName
 		if nodeID == "" {
-			// それでも空ならホスト名を使用
+			// If still empty, use hostname
 			nodeID = tsStatus.Self.HostName
 		}
 	}
 
-	// ルートが公開されているかどうかを確認
+	// Check if routes are advertised
 	connected := tailscaleIP != ""
 
-	// 結果をログに出力
+	// Log the results
 	logger.Info("Retrieved Tailscale status from pod",
 		"connected", connected,
 		"tailscaleIP", tailscaleIP,
