@@ -79,10 +79,7 @@ type ConnectorReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=events,verbs=get;create;patch
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
 func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	finalizer := "kodiak.mnicloud.jp/finalizer"
 	logger := log.FromContext(ctx)
 
 	var resource v1alpha1.Connector
@@ -94,74 +91,17 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
+	// Handle deletion
 	if !resource.ObjectMeta.DeletionTimestamp.IsZero() {
-		// Handle finalizer and cleanup
-		if controllerutil.ContainsFinalizer(&resource, finalizer) {
-			// Cleanup resources
-			deploy := r.deploymentForConnector(&resource)
-			err := r.Delete(ctx, deploy)
-			if err != nil && !errors.IsNotFound(err) {
-				logger.Error(err, "Failed to delete deployment")
-				return ctrl.Result{}, err
-			}
-
-			// Retrieve the latest resource state before removing finalizer
-			var latestResource v1alpha1.Connector
-			if err := r.Get(ctx, req.NamespacedName, &latestResource); err != nil {
-				if errors.IsNotFound(err) {
-					// Do nothing if resource is already deleted
-					logger.Info("Resource already deleted, skipping finalizer removal")
-					return ctrl.Result{}, nil
-				}
-				logger.Error(err, "Failed to get latest resource state for finalizer removal")
-				return ctrl.Result{}, err
-			}
-
-			// Only attempt to remove finalizer if it exists in the latest resource
-			if controllerutil.ContainsFinalizer(&latestResource, finalizer) {
-				controllerutil.RemoveFinalizer(&latestResource, finalizer)
-				if err := r.Update(ctx, &latestResource); err != nil {
-					// Log details in case of UID conflict or other errors
-					logger.Error(err, "Failed to remove finalizer",
-						"resourceUID", latestResource.UID,
-						"resourceVersion", latestResource.ResourceVersion)
-
-					if errors.IsConflict(err) {
-						// Retry if conflict occurred
-						logger.Info("Conflict detected when removing finalizer, will retry")
-						return ctrl.Result{Requeue: true}, nil
-					}
-					return ctrl.Result{}, err
-				}
-				logger.Info("Successfully removed finalizer")
-			}
-		}
-		return ctrl.Result{}, nil
+		return r.handleDeletion(ctx, &resource)
 	}
 
 	// Ensure finalizer
-	if !controllerutil.ContainsFinalizer(&resource, finalizer) {
-		controllerutil.AddFinalizer(&resource, finalizer)
-		if err := r.Update(ctx, &resource); err != nil {
-			logger.Error(err, "Failed to add finalizer")
-			return ctrl.Result{}, err
-		}
-		// Return here to avoid conflict with the status update below
-		return ctrl.Result{Requeue: true}, nil
+	if result, err := r.ensureFinalizer(ctx, &resource); err != nil || result.Requeue {
+		return result, err
 	}
 
-	// Ensure the tailscale Secret exists
-	if err := r.ensureTailscaleSecret(ctx, resource.Namespace, resource.Spec.Spec.Tailscale.AuthKey); err != nil {
-		logger.Error(err, "Unable to ensure tailscale Secret")
-		// Update status to reflect the error
-		r.setCondition(&resource, conditionTypeDeploymentReady, metav1.ConditionFalse, reasonDeploymentError, fmt.Sprintf("Secret error: %v", err))
-		if updateErr := r.Status().Update(ctx, &resource); updateErr != nil {
-			logger.Error(updateErr, "Unable to update Connector status after Secret error")
-		}
-		return ctrl.Result{}, err
-	}
-
-	// Check if Pod is running directly - this is more reliable than checking Deployment status
+	// Check if Pod is running
 	podList := &corev1.PodList{}
 	listOpts := []client.ListOption{
 		client.InNamespace(resource.Namespace),
@@ -213,52 +153,8 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Pod exists and deployment is done reconciling
 	r.setCondition(&resource, conditionTypeDeploymentReady, metav1.ConditionTrue, reasonDeploymentCreated, "Deployment ready")
 
-	// If pod is running, get Tailscale status
-	if podRunning {
-		status, err := r.getTailscaleStatus(ctx, &resource)
-		if err != nil {
-			logger.Error(err, "Failed to get Tailscale status")
-			r.setCondition(&resource, conditionTypeTailscaleConnected, metav1.ConditionFalse,
-				reasonTailscaleDisconnected, fmt.Sprintf("Error getting Tailscale status: %v", err))
-			r.setCondition(&resource, conditionTypeReady, metav1.ConditionFalse,
-				reasonTailscaleDisconnected, "Connector is not ready")
-		} else if status.Connected {
-			logger.Info("Setting Tailscale status to connected")
-			r.setCondition(&resource, conditionTypeTailscaleConnected, metav1.ConditionTrue,
-				reasonTailscaleConnected, "Tailscale node is connected")
-			r.setCondition(&resource, conditionTypeReady, metav1.ConditionTrue,
-				reasonTailscaleConnected, "Connector is ready")
-
-			// Set the actual status fields
-			resource.Status.NodeID = status.NodeID
-			resource.Status.TailscaleIP = status.IP
-			resource.Status.AdvertisedRoutes = status.AdvertisedRoutes
-
-			logger.Info("Updated connector status with Tailscale information",
-				"NodeID", status.NodeID,
-				"TailscaleIP", status.IP,
-				"AdvertisedRoutes", status.AdvertisedRoutes)
-		} else {
-			logger.Info("Tailscale is not connected")
-			r.setCondition(&resource, conditionTypeTailscaleConnected, metav1.ConditionFalse,
-				reasonTailscaleDisconnected, "Tailscale node is not connected")
-			r.setCondition(&resource, conditionTypeReady, metav1.ConditionFalse,
-				reasonTailscaleDisconnected, "Connector is not ready")
-		}
-	} else {
-		logger.Info("Pod exists but not running yet")
-		r.setCondition(&resource, conditionTypeTailscaleConnected, metav1.ConditionFalse,
-			reasonTailscaleDisconnected, "Tailscale pod is not running yet")
-		r.setCondition(&resource, conditionTypeReady, metav1.ConditionFalse,
-			reasonTailscaleDisconnected, "Connector is not ready")
-	}
-
-	// Update status
-	if err := r.Status().Update(ctx, &resource); err != nil {
-		logger.Error(err, "Unable to update Connector status",
-			"resourceVersion", resource.ResourceVersion)
-
-		// Requeue on status update failure
+	// Reconcile Tailscale status
+	if err := r.reconcileTailscaleStatus(ctx, &resource, podRunning); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
 
@@ -266,38 +162,95 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }
 
-// ensureTailscaleSecret ensures that the tailscale Secret exists in the specified namespace
-func (r *ConnectorReconciler) ensureTailscaleSecret(ctx context.Context, namespace string, authKey string) error {
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: namespace,
-		},
-		Type: corev1.SecretTypeOpaque,
-		StringData: map[string]string{
-			"TS_AUTH_KEY": authKey,
-		},
+// handleDeletion handles the resource deletion process, including Tailscale logout and finalizer removal
+func (r *ConnectorReconciler) handleDeletion(ctx context.Context, resource *v1alpha1.Connector) (ctrl.Result, error) {
+	finalizer := "kodiak.mnicloud.jp/finalizer"
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(resource, finalizer) {
+		return ctrl.Result{}, nil
 	}
 
-	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, &corev1.Secret{})
-	if err != nil {
-		if errors.IsNotFound(err) {
-			// Create the secret
-			err = r.Create(ctx, secret)
-			if err != nil {
-				return fmt.Errorf("failed to create tailscale Secret: %w", err)
+	// Run 'tailscale logout' to disconnect from Tailnet before cleaning up
+	// Find the running pods first
+	podList := &corev1.PodList{}
+	listOpts := []client.ListOption{
+		client.InNamespace(resource.Namespace),
+		client.MatchingLabels(map[string]string{"app": resource.Name + "-connector"}),
+	}
+
+	if err := r.List(ctx, podList, listOpts...); err == nil && len(podList.Items) > 0 {
+		// Find a running pod
+		for i := range podList.Items {
+			if podList.Items[i].Status.Phase == corev1.PodRunning {
+				podName := podList.Items[i].Name
+				logger.Info("Running 'tailscale logout' in connector pod before deleting", "pod", podName)
+
+				// Execute tailscale logout with --accept-risk=lose-data to force logout even if there are connection issues
+				stdout, stderr, err := r.execCommandInPod(ctx, podName, resource.Namespace, "tailscale", "tailscale", "logout", "--accept-risk=lose-data")
+				if err != nil {
+					logger.Error(err, "Failed to run 'tailscale logout' command",
+						"pod", podName,
+						"stderr", stderr,
+						"stdout", stdout)
+					// Try alternative approach - using reset instead of logout
+					logger.Info("Attempting 'tailscale reset' as fallback", "pod", podName)
+					resetStdout, resetStderr, resetErr := r.execCommandInPod(ctx, podName, resource.Namespace, "tailscale", "tailscale", "reset", "--accept-risk=lose-data", "--force")
+					if resetErr != nil {
+						logger.Error(resetErr, "Failed to run 'tailscale reset' command",
+							"pod", podName,
+							"stderr", resetStderr,
+							"stdout", resetStdout)
+					} else {
+						logger.Info("Successfully reset Tailscale state", "pod", podName)
+					}
+					// We don't return here, continue with deletion even if tailscale commands fail
+				} else {
+					logger.Info("Successfully disconnected from Tailnet", "pod", podName)
+				}
+
+				break
 			}
-			return nil
 		}
-		return fmt.Errorf("failed to check if tailscale Secret exists: %w", err)
 	}
 
-	// Secret exists, update it
-	err = r.Update(ctx, secret)
-	if err != nil {
-		return fmt.Errorf("failed to update tailscale Secret: %w", err)
+	// Cleanup resources
+	deploy := r.deploymentForConnector(resource)
+	err := r.Delete(ctx, deploy)
+	if err != nil && !errors.IsNotFound(err) {
+		logger.Error(err, "Failed to delete deployment")
+		return ctrl.Result{}, err
 	}
-	return nil
+
+	// Retrieve the latest resource state before removing finalizer
+	var latestResource v1alpha1.Connector
+	if err := r.Get(ctx, types.NamespacedName{Name: resource.Name, Namespace: resource.Namespace}, &latestResource); err != nil {
+		if errors.IsNotFound(err) {
+			logger.Info("Resource already deleted, skipping finalizer removal")
+			return ctrl.Result{}, nil
+		}
+		logger.Error(err, "Failed to get latest resource state for finalizer removal")
+		return ctrl.Result{}, err
+	}
+
+	// Only attempt to remove finalizer if it exists in the latest resource
+	if controllerutil.ContainsFinalizer(&latestResource, finalizer) {
+		controllerutil.RemoveFinalizer(&latestResource, finalizer)
+		if err := r.Update(ctx, &latestResource); err != nil {
+			logger.Error(err, "Failed to remove finalizer",
+				"resourceUID", latestResource.UID,
+				"resourceVersion", latestResource.ResourceVersion)
+
+			if errors.IsConflict(err) {
+				logger.Info("Conflict detected when removing finalizer, will retry")
+				return ctrl.Result{Requeue: true}, nil
+			}
+			return ctrl.Result{}, err
+		}
+		logger.Info("Successfully removed finalizer")
+	}
+
+	return ctrl.Result{}, nil
 }
 
 // reconcileDeployment creates or updates the Deployment for the Tailscale connector
@@ -342,7 +295,6 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 
 	// If a running Pod exists and the Deployment has ReadyReplicas, no update is needed
 	if podRunning && found.Status.ReadyReplicas > 0 {
-		// Deployment already exists and a pod is running, so do nothing
 		logger.Info("Deployment already exists with running pod",
 			"Name", found.Name,
 			"ReadyReplicas", found.Status.ReadyReplicas)
@@ -415,8 +367,16 @@ func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector) *ap
 	}
 
 	// Create environment variables for the container
-	env := []corev1.EnvVar{
-		{
+	env := []corev1.EnvVar{}
+
+	// Use authKey if specified directly, otherwise reference the secret
+	if cr.Spec.Spec.Tailscale.AuthKey != "" {
+		env = append(env, corev1.EnvVar{
+			Name:  "TS_AUTH_KEY",
+			Value: cr.Spec.Spec.Tailscale.AuthKey,
+		})
+	} else {
+		env = append(env, corev1.EnvVar{
 			Name: "TS_AUTH_KEY",
 			ValueFrom: &corev1.EnvVarSource{
 				SecretKeyRef: &corev1.SecretKeySelector{
@@ -426,33 +386,43 @@ func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector) *ap
 					Key: "TS_AUTH_KEY",
 				},
 			},
-		},
-		// Add POD_NAME and POD_UID for debugging Events
-		{
-			Name: "POD_NAME",
-			ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{
-					FieldPath: "metadata.name",
-				},
-			},
-		},
-		{
-			Name: "POD_UID",
-			ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{
-					FieldPath: "metadata.uid",
-				},
-			},
-		},
-		{
-			Name:  "TS_USERSPACE",
-			Value: "true", // Always use USERSPACE networking mode
-		},
-		{
-			Name:  "TS_HOSTNAME",
-			Value: hostname,
-		},
+		})
 	}
+
+	// Add POD_NAME and POD_UID for debugging Events
+	env = append(env, corev1.EnvVar{
+		Name: "POD_NAME",
+		ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{
+				FieldPath: "metadata.name",
+			},
+		},
+	})
+
+	env = append(env, corev1.EnvVar{
+		Name: "POD_UID",
+		ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{
+				FieldPath: "metadata.uid",
+			},
+		},
+	})
+
+	env = append(env, corev1.EnvVar{
+		Name:  "TS_USERSPACE",
+		Value: "true", // Always use USERSPACE networking mode
+	})
+
+	env = append(env, corev1.EnvVar{
+		Name:  "TS_HOSTNAME",
+		Value: hostname,
+	})
+
+	// Disable state storage in Kubernetes secrets
+	env = append(env, corev1.EnvVar{
+		Name:  "TS_KUBE_SECRET",
+		Value: "",
+	})
 
 	// Add control server URL if specified
 	if cr.Spec.Spec.Tailscale.ControlServerUrl != "" {
@@ -680,7 +650,7 @@ func (r *ConnectorReconciler) getTailscaleStatus(ctx context.Context, cr *v1alph
 	}
 
 	if len(podList.Items) == 0 {
-		// If pod not found by label, search without labels for debugging purposes
+		// If pod not found by label, search without labels for debugging
 		allPods := &corev1.PodList{}
 		if err := r.List(ctx, allPods, client.InNamespace(cr.Namespace)); err == nil {
 			logger.Info("Checking all pods in namespace",
@@ -724,7 +694,7 @@ func (r *ConnectorReconciler) getTailscaleStatus(ctx context.Context, cr *v1alph
 		}, nil
 	}
 
-	// Log details about the running pod for debugging
+	// Log details about the running pod
 	logger.Info("Found running pod for Tailscale connector",
 		"podName", runningPod.Name,
 		"podPhase", runningPod.Status.Phase,
@@ -757,9 +727,6 @@ func (r *ConnectorReconciler) getTailscaleStatus(ctx context.Context, cr *v1alph
 		}, nil
 	}
 
-	// Log the full JSON output for debugging
-	logger.Info("Raw tailscale status JSON output", "json", stdout)
-
 	// Parse the JSON
 	var tsStatus TailscaleStatusJSON
 	if err := json.Unmarshal([]byte(stdout), &tsStatus); err != nil {
@@ -778,7 +745,6 @@ func (r *ConnectorReconciler) getTailscaleStatus(ctx context.Context, cr *v1alph
 		tailscaleIP = tsStatus.TailscaleIPs[0]
 		logger.Info("Retrieved Tailscale IP from container", "ip", tailscaleIP)
 	} else {
-		// If no IP is found, use an empty string
 		tailscaleIP = ""
 		logger.Info("No Tailscale IPs found in status output - using empty string")
 	}
@@ -828,4 +794,75 @@ func (r *ConnectorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.Deployment{}).
 		Named("connector").
 		Complete(r)
+}
+
+// ensureFinalizer ensures the finalizer is added to the resource
+func (r *ConnectorReconciler) ensureFinalizer(ctx context.Context, resource *v1alpha1.Connector) (ctrl.Result, error) {
+	finalizer := "kodiak.mnicloud.jp/finalizer"
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(resource, finalizer) {
+		controllerutil.AddFinalizer(resource, finalizer)
+		if err := r.Update(ctx, resource); err != nil {
+			logger.Error(err, "Failed to add finalizer")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// reconcileTailscaleStatus checks Tailscale status and updates conditions
+func (r *ConnectorReconciler) reconcileTailscaleStatus(ctx context.Context, resource *v1alpha1.Connector, podRunning bool) error {
+	logger := log.FromContext(ctx)
+
+	// If pod is running, get Tailscale status
+	if podRunning {
+		status, err := r.getTailscaleStatus(ctx, resource)
+		if err != nil {
+			logger.Error(err, "Failed to get Tailscale status")
+			r.setCondition(resource, conditionTypeTailscaleConnected, metav1.ConditionFalse,
+				reasonTailscaleDisconnected, fmt.Sprintf("Error getting Tailscale status: %v", err))
+			r.setCondition(resource, conditionTypeReady, metav1.ConditionFalse,
+				reasonTailscaleDisconnected, "Connector is not ready")
+		} else if status.Connected {
+			logger.Info("Setting Tailscale status to connected")
+			r.setCondition(resource, conditionTypeTailscaleConnected, metav1.ConditionTrue,
+				reasonTailscaleConnected, "Tailscale node is connected")
+			r.setCondition(resource, conditionTypeReady, metav1.ConditionTrue,
+				reasonTailscaleConnected, "Connector is ready")
+
+			// Set the actual status fields
+			resource.Status.NodeID = status.NodeID
+			resource.Status.TailscaleIP = status.IP
+			resource.Status.AdvertisedRoutes = status.AdvertisedRoutes
+
+			logger.Info("Updated connector status with Tailscale information",
+				"NodeID", status.NodeID,
+				"TailscaleIP", status.IP,
+				"AdvertisedRoutes", status.AdvertisedRoutes)
+		} else {
+			logger.Info("Tailscale is not connected")
+			r.setCondition(resource, conditionTypeTailscaleConnected, metav1.ConditionFalse,
+				reasonTailscaleDisconnected, "Tailscale node is not connected")
+			r.setCondition(resource, conditionTypeReady, metav1.ConditionFalse,
+				reasonTailscaleDisconnected, "Connector is not ready")
+		}
+	} else {
+		logger.Info("Pod exists but not running yet")
+		r.setCondition(resource, conditionTypeTailscaleConnected, metav1.ConditionFalse,
+			reasonTailscaleDisconnected, "Tailscale pod is not running yet")
+		r.setCondition(resource, conditionTypeReady, metav1.ConditionFalse,
+			reasonTailscaleDisconnected, "Connector is not ready")
+	}
+
+	// Update status
+	if err := r.Status().Update(ctx, resource); err != nil {
+		logger.Error(err, "Unable to update Connector status",
+			"resourceVersion", resource.ResourceVersion)
+		return err
+	}
+
+	return nil
 }
