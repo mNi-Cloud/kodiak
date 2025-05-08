@@ -94,6 +94,49 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	if !resource.ObjectMeta.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&resource, finalizer) {
+			// Run 'tailscale logout' to disconnect from Tailnet before cleaning up
+			// Find the running pods first
+			podList := &corev1.PodList{}
+			listOpts := []client.ListOption{
+				client.InNamespace(resource.Namespace),
+				client.MatchingLabels(map[string]string{"app": resource.Name + "-connector"}),
+			}
+
+			if err := r.List(ctx, podList, listOpts...); err == nil && len(podList.Items) > 0 {
+				// Find a running pod
+				for i := range podList.Items {
+					if podList.Items[i].Status.Phase == corev1.PodRunning {
+						podName := podList.Items[i].Name
+						logger.Info("Running 'tailscale logout' in connector pod before deleting", "pod", podName)
+
+						// Execute tailscale logout with --accept-risk=lose-data to force logout even if there are connection issues
+						stdout, stderr, err := r.execCommandInPod(ctx, podName, resource.Namespace, "tailscale", "tailscale", "logout", "--accept-risk=lose-data")
+						if err != nil {
+							logger.Error(err, "Failed to run 'tailscale logout' command",
+								"pod", podName,
+								"stderr", stderr,
+								"stdout", stdout)
+							// Try alternative approach - using reset instead of logout
+							logger.Info("Attempting 'tailscale reset' as fallback", "pod", podName)
+							resetStdout, resetStderr, resetErr := r.execCommandInPod(ctx, podName, resource.Namespace, "tailscale", "tailscale", "reset", "--accept-risk=lose-data", "--force")
+							if resetErr != nil {
+								logger.Error(resetErr, "Failed to run 'tailscale reset' command",
+									"pod", podName,
+									"stderr", resetStderr,
+									"stdout", resetStdout)
+							} else {
+								logger.Info("Successfully reset Tailscale state", "pod", podName)
+							}
+							// We don't return here, continue with deletion even if tailscale commands fail
+						} else {
+							logger.Info("Successfully disconnected from Tailnet", "pod", podName)
+						}
+
+						break
+					}
+				}
+			}
+
 			// Cleanup resources
 			deploy := r.deploymentForConnector(&resource)
 			err := r.Delete(ctx, deploy)
