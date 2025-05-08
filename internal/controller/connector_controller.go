@@ -105,29 +105,29 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				return ctrl.Result{}, err
 			}
 
-			 // Retrieve the latest resource state before removing finalizer
+			// Retrieve the latest resource state before removing finalizer
 			var latestResource v1alpha1.Connector
 			if err := r.Get(ctx, req.NamespacedName, &latestResource); err != nil {
 				if errors.IsNotFound(err) {
-					 // Do nothing if resource is already deleted
+					// Do nothing if resource is already deleted
 					logger.Info("Resource already deleted, skipping finalizer removal")
 					return ctrl.Result{}, nil
 				}
 				logger.Error(err, "Failed to get latest resource state for finalizer removal")
 				return ctrl.Result{}, err
-			 }
+			}
 
-			 // Only attempt to remove finalizer if it exists in the latest resource
+			// Only attempt to remove finalizer if it exists in the latest resource
 			if controllerutil.ContainsFinalizer(&latestResource, finalizer) {
 				controllerutil.RemoveFinalizer(&latestResource, finalizer)
 				if err := r.Update(ctx, &latestResource); err != nil {
-					 // Log details in case of UID conflict or other errors
+					// Log details in case of UID conflict or other errors
 					logger.Error(err, "Failed to remove finalizer",
 						"resourceUID", latestResource.UID,
 						"resourceVersion", latestResource.ResourceVersion)
 
 					if errors.IsConflict(err) {
-						 // Retry if conflict occurred
+						// Retry if conflict occurred
 						logger.Info("Conflict detected when removing finalizer, will retry")
 						return ctrl.Result{Requeue: true}, nil
 					}
@@ -140,7 +140,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Ensure finalizer
-	if (!controllerutil.ContainsFinalizer(&resource, finalizer)) {
+	if !controllerutil.ContainsFinalizer(&resource, finalizer) {
 		controllerutil.AddFinalizer(&resource, finalizer)
 		if err := r.Update(ctx, &resource); err != nil {
 			logger.Error(err, "Failed to add finalizer")
@@ -229,7 +229,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			r.setCondition(&resource, conditionTypeReady, metav1.ConditionTrue,
 				reasonTailscaleConnected, "Connector is ready")
 
-			 // Set the actual status fields
+			// Set the actual status fields
 			resource.Status.NodeID = status.NodeID
 			resource.Status.TailscaleIP = status.IP
 			resource.Status.AdvertisedRoutes = status.AdvertisedRoutes
@@ -258,7 +258,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		logger.Error(err, "Unable to update Connector status",
 			"resourceVersion", resource.ResourceVersion)
 
-		 // Requeue on status update failure
+		// Requeue on status update failure
 		return ctrl.Result{Requeue: true}, nil
 	}
 
@@ -383,7 +383,7 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 	// Check if Deployment has any replicas ready
 	if found.Status.ReadyReplicas > 0 {
 		logger.Info("Deployment has ready replicas", "ReadyReplicas", found.Status.ReadyReplicas)
-		 // Continue if the deployment has at least one ready replica
+		// Continue if the deployment has at least one ready replica
 		return ctrl.Result{}, nil
 	}
 
@@ -651,7 +651,7 @@ func (r *ConnectorReconciler) execCommandInPod(ctx context.Context, podName, nam
 			"stdout_length", stdout.Len(),
 			"stderr_length", stderr.Len())
 
-		 // Display part of output for debugging
+		// Display part of output for debugging
 		outStr := stdout.String()
 		if len(outStr) > 100 {
 			logger.Info("Command output preview", "preview", outStr[:100]+"...")
@@ -680,14 +680,14 @@ func (r *ConnectorReconciler) getTailscaleStatus(ctx context.Context, cr *v1alph
 	}
 
 	if len(podList.Items) == 0 {
-		 // If pod not found by label, search without labels for debugging purposes
+		// If pod not found by label, search without labels for debugging purposes
 		allPods := &corev1.PodList{}
 		if err := r.List(ctx, allPods, client.InNamespace(cr.Namespace)); err == nil {
 			logger.Info("Checking all pods in namespace",
 				"namespace", cr.Namespace,
 				"pod_count", len(allPods.Items))
 
-			 // Log labels of each pod to identify the issue
+			// Log labels of each pod to identify the issue
 			for _, pod := range allPods.Items {
 				if strings.Contains(pod.Name, "connector") {
 					labels := make([]string, 0, len(pod.Labels))
