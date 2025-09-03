@@ -24,8 +24,8 @@ import (
 	"time"
 
 	"github.com/bufbuild/connect-go"
-	api "github.com/jsiebens/ionscale/pkg/gen/ionscale/v1/ionscalev1connect"
 	pb "github.com/jsiebens/ionscale/pkg/gen/ionscale/v1"
+	api "github.com/jsiebens/ionscale/pkg/gen/ionscale/v1/ionscalev1connect"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
