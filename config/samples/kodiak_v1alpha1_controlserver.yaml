@@ -1,0 +1,38 @@
+apiVersion: kodiak.mnicloud.jp/v1alpha1
+kind: ControlServer
+metadata:
+  labels:
+    app.kubernetes.io/name: kodiak
+    app.kubernetes.io/managed-by: kustomize
+  name: controlserver-sample
+spec:
+  image: ghcr.io/jsiebens/ionscale:latest
+  replicas: 1
+  config:
+    listenAddr: ":8080"
+    metricsListenAddr: ":9091"
+    stunListenAddr: ":3478"
+    publicAddr: "controlserver.example.com"
+    database:
+      type: sqlite
+      url: "/data/ionscale.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
+    tls:
+      disable: false
+      acmeEnabled: false
+    derp:
+      disabled: false
+      regionId: 1000
+      regionCode: "kodiak"
+      regionName: "Kodiak Embedded DERP"
+    dns:
+      magicDnsSuffix: "tailnet.local"
+  storage:
+    size: "10Gi"
+    storageClassName: "standard"
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    requests:
+      cpu: "100m"
+      memory: "128Mi"

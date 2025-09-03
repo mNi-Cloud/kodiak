@@ -30,3 +30,16 @@ resources:
 - tailscale_role.yaml
 - tailscale_role_binding.yaml
 
+# For each CRD, "Admin", "Editor" and "Viewer" roles are scaffolded by
+# default, aiding admins in cluster management. Those roles are
+# not used by the kodiak itself. You can comment the following lines
+# if you do not want those helpers be installed with your Project.
+- authkey_admin_role.yaml
+- authkey_editor_role.yaml
+- authkey_viewer_role.yaml
+- tailnet_admin_role.yaml
+- tailnet_editor_role.yaml
+- tailnet_viewer_role.yaml
+- controlserver_admin_role.yaml
+- controlserver_editor_role.yaml
+- controlserver_viewer_role.yaml

@@ -37,9 +37,10 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	"k8s.io/client-go/kubernetes"
+
 	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
 	"github.com/mNi-Cloud/kodiak/internal/controller"
-	"k8s.io/client-go/kubernetes"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -218,6 +219,27 @@ func main() {
 		Config:     config,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Connector")
+		os.Exit(1)
+	}
+	if err := (&controller.ControlServerReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ControlServer")
+		os.Exit(1)
+	}
+	if err := (&controller.TailnetReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Tailnet")
+		os.Exit(1)
+	}
+	if err := (&controller.AuthKeyReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AuthKey")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

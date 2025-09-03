@@ -1,0 +1,308 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: controlservers.kodiak.mnicloud.jp
+spec:
+  group: kodiak.mnicloud.jp
+  names:
+    kind: ControlServer
+    listKind: ControlServerList
+    plural: controlservers
+    singular: controlserver
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Control server ready status
+      jsonPath: .status.ready
+      name: READY
+      type: boolean
+    - description: Control server endpoint
+      jsonPath: .status.endpoint
+      name: ENDPOINT
+      type: string
+    - description: Current phase
+      jsonPath: .status.phase
+      name: PHASE
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ControlServer is the Schema for the controlservers API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of ControlServer
+            properties:
+              config:
+                description: Configuration for the control server
+                properties:
+                  auth:
+                    description: Auth configuration for OIDC
+                    properties:
+                      oidc:
+                        description: OIDC provider configuration
+                        properties:
+                          additionalScopes:
+                            description: AdditionalScopes for OIDC authentication
+                            items:
+                              type: string
+                            type: array
+                          clientId:
+                            description: ClientID for OIDC authentication
+                            type: string
+                          clientSecretRef:
+                            description: ClientSecretRef references a secret containing
+                              the client secret
+                            properties:
+                              key:
+                                description: The key of the secret to select from.  Must
+                                  be a valid secret key.
+                                type: string
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                              optional:
+                                description: Specify whether the Secret or its key
+                                  must be defined
+                                type: boolean
+                            required:
+                            - key
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          issuer:
+                            description: Issuer URL for the OIDC provider
+                            type: string
+                        required:
+                        - clientId
+                        - clientSecretRef
+                        - issuer
+                        type: object
+                    type: object
+                  database:
+                    description: Database configuration
+                    properties:
+                      type:
+                        default: sqlite
+                        description: Type of database
+                        enum:
+                        - sqlite
+                        - postgres
+                        type: string
+                      url:
+                        description: URL for database connection
+                        type: string
+                    type: object
+                  derp:
+                    description: DERP server configuration
+                    properties:
+                      disabled:
+                        default: false
+                        description: Disabled flag for embedded DERP server
+                        type: boolean
+                      regionCode:
+                        default: kodiak
+                        description: RegionCode for the DERP region
+                        type: string
+                      regionId:
+                        default: 1000
+                        description: RegionID for the DERP region
+                        type: integer
+                      regionName:
+                        default: Kodiak Embedded DERP
+                        description: RegionName for the DERP region
+                        type: string
+                    type: object
+                  dns:
+                    description: DNS configuration
+                    properties:
+                      magicDnsSuffix:
+                        default: tailnet.local
+                        description: MagicDNSSuffix for the tailnet
+                        type: string
+                    type: object
+                  listenAddr:
+                    default: :8080
+                    description: ListenAddr for the control server API
+                    type: string
+                  metricsListenAddr:
+                    default: :9091
+                    description: MetricsListenAddr for metrics endpoint
+                    type: string
+                  publicAddr:
+                    description: PublicAddr is the public address for the control
+                      server
+                    type: string
+                  stunListenAddr:
+                    default: :3478
+                    description: StunListenAddr for STUN server
+                    type: string
+                  tls:
+                    description: TLS configuration
+                    properties:
+                      acmeEmail:
+                        description: AcmeEmail for Let's Encrypt registration
+                        type: string
+                      acmeEnabled:
+                        description: AcmeEnabled enables automatic certificate management
+                        type: boolean
+                      certSecretName:
+                        description: CertSecretName references a secret containing
+                          TLS cert and key
+                        type: string
+                      disable:
+                        default: false
+                        description: Disable TLS
+                        type: boolean
+                    type: object
+                type: object
+              image:
+                default: ghcr.io/jsiebens/ionscale:latest
+                description: Image for the control server
+                type: string
+              replicas:
+                default: 1
+                description: Replicas for the control server deployment
+                format: int32
+                minimum: 1
+                type: integer
+              resources:
+                description: Resources for the control server container
+                properties:
+                  limits:
+                    description: ResourceList defines resource quantities
+                    properties:
+                      cpu:
+                        type: string
+                      memory:
+                        type: string
+                    type: object
+                  requests:
+                    description: ResourceList defines resource quantities
+                    properties:
+                      cpu:
+                        type: string
+                      memory:
+                        type: string
+                    type: object
+                type: object
+              storage:
+                description: Storage configuration for persistent data
+                properties:
+                  size:
+                    default: 10Gi
+                    description: Size of the persistent volume
+                    type: string
+                  storageClassName:
+                    description: StorageClassName for the PVC
+                    type: string
+                type: object
+            type: object
+          status:
+            description: status defines the observed state of ControlServer
+            properties:
+              conditions:
+                description: conditions represent the current state of the ControlServer
+                  resource.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              endpoint:
+                description: Endpoint is the service endpoint for the control server
+                type: string
+              phase:
+                description: Phase represents the current phase of the control server
+                type: string
+              ready:
+                description: Ready indicates if the control server is ready
+                type: boolean
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

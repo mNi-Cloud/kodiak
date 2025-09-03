@@ -12,16 +12,25 @@ spec:
   #   namespace: default
   spec:
     tailscale:
-      # Required: Tailscale auth key for authentication
-      # Note: This is a placeholder - replace with valid key from ionscale.munenick.me
-      authKey: "some-valid-auth-key"
+      # Method 1: Using manual auth key
+      # authKey: "tskey-auth-xxxxx"
+      
+      # Method 2: Using AuthKey resource (recommended)
+      # This will automatically use the auth key from the referenced AuthKey resource
+      authKeyRef:
+        name: authkey-sample
       
       # Optional: Tailscale image version (defaults to "stable")
       version: "stable"
       
-      # Optional: Control server URL for using Headscale or other self-hosted control server
-      # Example: "https://ionscale.example.com"
-      controlServerUrl: "https://ionscale.example.com"
+      # Optional: Control server URL
+      # Method 1: Manual URL
+      # controlServerUrl: "https://controlserver.example.com"
+      
+      # Method 2: Using ControlServer resource (recommended)
+      # This will automatically use the endpoint from the referenced ControlServer resource
+      controlServerRef:
+        name: controlserver-sample
       
       # Required: Networks to advertise (CIDR format)
       advertiseRoutes: 
