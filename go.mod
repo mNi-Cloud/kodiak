@@ -1,6 +1,8 @@
 module github.com/mNi-Cloud/kodiak
 
-go 1.24
+go 1.24.2
+
+toolchain go1.24.6
 
 godebug default=go1.23
 
