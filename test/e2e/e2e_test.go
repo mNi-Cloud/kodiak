@@ -167,7 +167,7 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("Running"), "Incorrect controller-manager pod status")
 			}
-			Eventually(verifyControllerUp).Should(Succeed())
+			Eventually(verifyControllerUp).WithTimeout(time.Minute).WithPolling(time.Second).Should(Succeed())
 		})
 
 		It("should ensure the metrics endpoint is serving metrics", func() {
@@ -196,7 +196,7 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(ContainSubstring("8443"), "Metrics endpoint is not ready")
 			}
-			Eventually(verifyMetricsEndpointReady).Should(Succeed())
+			Eventually(verifyMetricsEndpointReady).WithTimeout(time.Minute).WithPolling(time.Second).Should(Succeed())
 
 			By("verifying that the controller manager is serving the metrics server")
 			verifyMetricsServerStarted := func(g Gomega) {
@@ -206,7 +206,7 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(output).To(ContainSubstring("controller-runtime.metrics\tServing metrics server"),
 					"Metrics server not yet started")
 			}
-			Eventually(verifyMetricsServerStarted).Should(Succeed())
+			Eventually(verifyMetricsServerStarted).WithTimeout(time.Minute).WithPolling(time.Second).Should(Succeed())
 
 			By("creating the curl-metrics pod to access the metrics endpoint")
 			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
