@@ -126,6 +126,11 @@ type TLSConfig struct {
 	// +optional
 	// AcmeEmail for Let's Encrypt registration
 	AcmeEmail string `json:"acmeEmail,omitempty"`
+
+	// +kubebuilder:default=true
+	// +optional
+	// ForceHTTPS redirects HTTP requests to HTTPS when TLS is enabled
+	ForceHTTPS bool `json:"forceHttps,omitempty"`
 }
 
 // DERPConfig defines DERP server settings

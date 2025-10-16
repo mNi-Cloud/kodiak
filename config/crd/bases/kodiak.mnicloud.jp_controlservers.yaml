@@ -181,6 +181,11 @@ spec:
                         default: false
                         description: Disable TLS
                         type: boolean
+                      forceHttps:
+                        default: true
+                        description: ForceHTTPS redirects HTTP requests to HTTPS when
+                          TLS is enabled
+                        type: boolean
                     type: object
                 type: object
               image:

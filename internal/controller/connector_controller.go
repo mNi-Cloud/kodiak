@@ -28,7 +28,7 @@ import (
 	"github.com/mNi-Cloud/kodiak/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -84,7 +84,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	var resource v1alpha1.Connector
 	if err := r.Get(ctx, req.NamespacedName, &resource); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		logger.Error(err, "Unable to get Connector")
@@ -99,6 +99,33 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Ensure finalizer
 	if result, err := r.ensureFinalizer(ctx, &resource); err != nil || result.Requeue {
 		return result, err
+	}
+
+	loginServer := resource.Spec.Spec.Tailscale.ControlServerUrl
+	if loginServer == "" && resource.Spec.Spec.Tailscale.ControlServerRef != nil && resource.Spec.Spec.Tailscale.ControlServerRef.Name != "" {
+		var controlServer v1alpha1.ControlServer
+		if err := r.Get(ctx, types.NamespacedName{Name: resource.Spec.Spec.Tailscale.ControlServerRef.Name, Namespace: resource.Namespace}, &controlServer); err != nil {
+			if apierrors.IsNotFound(err) {
+				logger.Info("ControlServer reference not found yet", "controlServer", resource.Spec.Spec.Tailscale.ControlServerRef.Name)
+				r.setCondition(&resource, conditionTypeReady, metav1.ConditionFalse, reasonProcessing, fmt.Sprintf("Waiting for control server %q", resource.Spec.Spec.Tailscale.ControlServerRef.Name))
+				if updateErr := r.Status().Update(ctx, &resource); updateErr != nil {
+					logger.Error(updateErr, "Unable to update connector status")
+				}
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+			return ctrl.Result{}, err
+		}
+
+		if !controlServer.Status.Ready || controlServer.Status.Endpoint == "" {
+			logger.Info("ControlServer not ready", "controlServer", controlServer.Name)
+			r.setCondition(&resource, conditionTypeReady, metav1.ConditionFalse, reasonProcessing, fmt.Sprintf("Control server %q is not ready", controlServer.Name))
+			if updateErr := r.Status().Update(ctx, &resource); updateErr != nil {
+				logger.Error(updateErr, "Unable to update connector status")
+			}
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		loginServer = controlServer.Status.Endpoint
 	}
 
 	// Check if Pod is running
@@ -127,7 +154,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Reconcile the Deployment for Tailscale connector
-	deployResult, err := r.reconcileDeployment(ctx, &resource)
+	deployResult, err := r.reconcileDeployment(ctx, &resource, loginServer)
 	if err != nil {
 		logger.Error(err, "Unable to reconcile Deployment")
 		r.setCondition(&resource, conditionTypeDeploymentReady, metav1.ConditionFalse, reasonDeploymentError, err.Error())
@@ -215,9 +242,9 @@ func (r *ConnectorReconciler) handleDeletion(ctx context.Context, resource *v1al
 	}
 
 	// Cleanup resources
-	deploy := r.deploymentForConnector(resource)
+	deploy := r.deploymentForConnector(resource, "")
 	err := r.Delete(ctx, deploy)
-	if err != nil && !errors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) {
 		logger.Error(err, "Failed to delete deployment")
 		return ctrl.Result{}, err
 	}
@@ -225,7 +252,7 @@ func (r *ConnectorReconciler) handleDeletion(ctx context.Context, resource *v1al
 	// Retrieve the latest resource state before removing finalizer
 	var latestResource v1alpha1.Connector
 	if err := r.Get(ctx, types.NamespacedName{Name: resource.Name, Namespace: resource.Namespace}, &latestResource); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			logger.Info("Resource already deleted, skipping finalizer removal")
 			return ctrl.Result{}, nil
 		}
@@ -241,7 +268,7 @@ func (r *ConnectorReconciler) handleDeletion(ctx context.Context, resource *v1al
 				"resourceUID", latestResource.UID,
 				"resourceVersion", latestResource.ResourceVersion)
 
-			if errors.IsConflict(err) {
+			if apierrors.IsConflict(err) {
 				logger.Info("Conflict detected when removing finalizer, will retry")
 				return ctrl.Result{Requeue: true}, nil
 			}
@@ -254,9 +281,9 @@ func (r *ConnectorReconciler) handleDeletion(ctx context.Context, resource *v1al
 }
 
 // reconcileDeployment creates or updates the Deployment for the Tailscale connector
-func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alpha1.Connector) (ctrl.Result, error) {
+func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alpha1.Connector, loginServer string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-	deploy := r.deploymentForConnector(cr)
+	deploy := r.deploymentForConnector(cr, loginServer)
 
 	// Set controller reference
 	if err := controllerutil.SetControllerReference(cr, deploy, r.Scheme); err != nil {
@@ -266,7 +293,7 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 	// Check if the Deployment already exists
 	found := &appsv1.Deployment{}
 	err := r.Get(ctx, types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace}, found)
-	if err != nil && errors.IsNotFound(err) {
+	if err != nil && apierrors.IsNotFound(err) {
 		logger.Info("Creating Deployment", "Name", deploy.Name)
 		if err = r.Create(ctx, deploy); err != nil {
 			return ctrl.Result{}, err
@@ -323,7 +350,7 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 
 		if err = r.Update(ctx, updatedDeploy); err != nil {
 			// If conflict occurred, log but don't return error
-			if errors.IsConflict(err) {
+			if apierrors.IsConflict(err) {
 				logger.Info("Deployment update conflict, will retry on next reconcile")
 				return ctrl.Result{Requeue: true}, nil
 			}
@@ -346,7 +373,7 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 }
 
 // deploymentForConnector returns a Deployment for the Tailscale connector
-func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector) *appsv1.Deployment {
+func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector, loginServer string) *appsv1.Deployment {
 	version := cr.Spec.Spec.Tailscale.Version
 	if version == "" {
 		version = "stable"
@@ -425,10 +452,15 @@ func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector) *ap
 	})
 
 	// Add control server URL if specified
-	if cr.Spec.Spec.Tailscale.ControlServerUrl != "" {
+	effectiveLoginServer := cr.Spec.Spec.Tailscale.ControlServerUrl
+	if effectiveLoginServer == "" {
+		effectiveLoginServer = loginServer
+	}
+
+	if effectiveLoginServer != "" {
 		env = append(env, corev1.EnvVar{
 			Name:  "TS_EXTRA_ARGS",
-			Value: "--login-server=" + cr.Spec.Spec.Tailscale.ControlServerUrl,
+			Value: "--login-server=" + effectiveLoginServer,
 		})
 	}
 

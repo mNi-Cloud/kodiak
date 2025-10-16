@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/bufbuild/connect-go"
+	ionscaleclient "github.com/jsiebens/ionscale/pkg/client/ionscale"
 	pb "github.com/jsiebens/ionscale/pkg/gen/ionscale/v1"
 	api "github.com/jsiebens/ionscale/pkg/gen/ionscale/v1/ionscalev1connect"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -32,11 +33,11 @@ import (
 // ControlServerClient provides a client interface for interacting with the control server
 type ControlServerClient struct {
 	client api.IonscaleServiceClient
-	token  string
+	auth   ionscaleclient.ClientAuth
 }
 
 // NewControlServerClient creates a new control server client
-func NewControlServerClient(serverURL string, token string, insecureSkipVerify bool) (*ControlServerClient, error) {
+func NewControlServerClient(serverURL string, systemAdminKey string, insecureSkipVerify bool) (*ControlServerClient, error) {
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: insecureSkipVerify,
 	}
@@ -48,24 +49,35 @@ func NewControlServerClient(serverURL string, token string, insecureSkipVerify b
 		Timeout: 30 * time.Second,
 	}
 
-	interceptors := connect.WithInterceptors(&authInterceptor{token: token})
+	auth, err := ionscaleclient.LoadClientAuth(serverURL, systemAdminKey)
+	if err != nil {
+		return nil, fmt.Errorf("unable to prepare client auth: %w", err)
+	}
+
+	interceptors := connect.WithInterceptors(&authInterceptor{auth: auth})
 	client := api.NewIonscaleServiceClient(httpClient, serverURL, interceptors)
 
 	return &ControlServerClient{
 		client: client,
-		token:  token,
+		auth:   auth,
 	}, nil
 }
 
 // authInterceptor adds authentication to requests
 type authInterceptor struct {
-	token string
+	auth ionscaleclient.ClientAuth
 }
 
 func (i *authInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		if i.token != "" {
-			req.Header().Set("Authorization", fmt.Sprintf("Bearer %s", i.token))
+		if i.auth != nil {
+			token, err := i.auth.GetToken()
+			if err != nil {
+				return nil, err
+			}
+			if token != "" {
+				req.Header().Set("Authorization", fmt.Sprintf("Bearer %s", token))
+			}
 		}
 		return next(ctx, req)
 	}
@@ -74,8 +86,11 @@ func (i *authInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 func (i *authInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
 	return func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
 		conn := next(ctx, spec)
-		if i.token != "" {
-			conn.RequestHeader().Set("Authorization", fmt.Sprintf("Bearer %s", i.token))
+		if i.auth != nil {
+			token, err := i.auth.GetToken()
+			if err == nil && token != "" {
+				conn.RequestHeader().Set("Authorization", fmt.Sprintf("Bearer %s", token))
+			}
 		}
 		return conn
 	}
@@ -86,14 +101,8 @@ func (i *authInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 }
 
 // CreateTailnet creates a new tailnet
-func (c *ControlServerClient) CreateTailnet(ctx context.Context, name string, iamPolicy string, aclPolicy string) (*pb.Tailnet, error) {
-	req := connect.NewRequest(&pb.CreateTailnetRequest{
-		Name:      name,
-		IamPolicy: iamPolicy,
-		AclPolicy: aclPolicy,
-	})
-
-	resp, err := c.client.CreateTailnet(ctx, req)
+func (c *ControlServerClient) CreateTailnet(ctx context.Context, request *pb.CreateTailnetRequest) (*pb.Tailnet, error) {
+	resp, err := c.client.CreateTailnet(ctx, connect.NewRequest(request))
 	if err != nil {
 		return nil, err
 	}
@@ -116,14 +125,8 @@ func (c *ControlServerClient) GetTailnet(ctx context.Context, tailnetID uint64) 
 }
 
 // UpdateTailnet updates an existing tailnet
-func (c *ControlServerClient) UpdateTailnet(ctx context.Context, tailnetID uint64, iamPolicy string, aclPolicy string) (*pb.Tailnet, error) {
-	req := connect.NewRequest(&pb.UpdateTailnetRequest{
-		TailnetId: tailnetID,
-		IamPolicy: iamPolicy,
-		AclPolicy: aclPolicy,
-	})
-
-	resp, err := c.client.UpdateTailnet(ctx, req)
+func (c *ControlServerClient) UpdateTailnet(ctx context.Context, request *pb.UpdateTailnetRequest) (*pb.Tailnet, error) {
+	resp, err := c.client.UpdateTailnet(ctx, connect.NewRequest(request))
 	if err != nil {
 		return nil, err
 	}
