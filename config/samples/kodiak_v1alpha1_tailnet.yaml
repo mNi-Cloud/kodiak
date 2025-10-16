@@ -6,15 +6,22 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: tailnet-sample
 spec:
+  # ControlServer that manages this tailnet
   controlServerRef:
     name: controlserver-sample
+
+  # Tailnet name (as seen in ionscale)
   name: "my-tailnet"
+
+  # Optional IAM policy (HuJSON)
   iamPolicy: |
     {
       "groups": {
         "group:admin": ["user@example.com"]
       }
     }
+
+  # Optional ACL policy (HuJSON)
   aclPolicy: |
     {
       "groups": {
@@ -28,11 +35,19 @@ spec:
         }
       ]
     }
+
+  # DNS configuration
   dnsConfig:
     magicDns: true
     nameservers:
       - "8.8.8.8"
       - "8.8.4.4"
+    # domains:
+    #   - "corp.example.com"
+    # searchDomains:
+    #   - "svc.cluster.local"
+
+  # Optional feature toggles
   serviceCollectionEnabled: false
   fileSharingEnabled: true
   sshEnabled: true

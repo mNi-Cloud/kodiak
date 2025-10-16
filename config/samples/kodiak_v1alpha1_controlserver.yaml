@@ -9,26 +9,73 @@ spec:
   image: ghcr.io/jsiebens/ionscale:latest
   replicas: 1
   config:
+    # Core listener configuration
     listenAddr: ":8080"
     metricsListenAddr: ":9091"
     stunListenAddr: ":3478"
-    publicAddr: "controlserver.example.com"
+    publicAddr: "controlserver.example.com:8080"
+    stunPublicAddr: "controlserver.example.com:3478"
+
+    # Database configuration
     database:
       type: sqlite
       url: "/data/ionscale.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
+
+    # TLS configuration (self-signed secret example)
     tls:
       disable: false
+      forceHttps: true
+      certSecretName: controlserver-tls
+      # certFile: "/etc/ionscale/tls/tls.crt"
+      # keyFile: "/etc/ionscale/tls/tls.key"
       acmeEnabled: false
+      # acmeEmail: "admin@example.com"
+      # acmeCa: "https://acme-v02.api.letsencrypt.org/directory"
+      # acmePath: "./data"
+
+    # DERP configuration
     derp:
       server:
-        disabled: true
+        disabled: false
         regionId: 1000
         regionCode: "kodiak"
         regionName: "Kodiak Embedded DERP"
       sources:
         - https://controlplane.tailscale.com/derpmap/default
+        # - https://example.com/custom-derpmap.json
+
+    # DNS (MagicDNS + provider hooks)
     dns:
       magicDnsSuffix: "tailnet.local"
+      provider:
+        name: ""
+        zone: ""
+        config: {}
+
+    # Poll-net keepalive interval
+    pollNet:
+      keepAliveInterval: "60s"
+
+    # Logging configuration
+    logging:
+      format: "text"
+      level: "info"
+      # file: "/var/log/ionscale/controlserver.log"
+
+    # Authentication (OIDC + system admins)
+    # auth:
+      # provider:
+        # issuer: "https://example.com/oidc"
+        # clientId: "kodiak-controlserver"
+        # additionalScopes: []
+        # clientSecretRef:
+        #   name: oidc-client-secret
+        #   key: client-secret
+      # systemAdmins:
+        # emails: []
+        # subs: []
+        # filters: []
+
   storage:
     size: "10Gi"
     storageClassName: "standard"

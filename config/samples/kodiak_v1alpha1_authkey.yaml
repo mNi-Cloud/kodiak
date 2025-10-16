@@ -6,12 +6,17 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: authkey-sample
 spec:
+  # Tailnet to create the auth key in
   tailnetRef:
     name: tailnet-sample
+
+  # Optional key behaviour
   ephemeral: false
   expiry: "24h"
   tags:
     - "tag:k8s"
     - "tag:connector"
   preAuthorized: true
+
+  # Optional secret override (defaults to authkey-<name>)
   secretName: authkey-sample-secret

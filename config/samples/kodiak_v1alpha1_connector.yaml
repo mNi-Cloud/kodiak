@@ -10,6 +10,9 @@ spec:
   # dependsOn:
   #   name: some-dependency
   #   namespace: default
+  metadata:
+    labels:
+      app.kubernetes.io/component: tailscale-connector
   spec:
     tailscale:
       # Method 1: Using manual auth key
@@ -46,7 +49,6 @@ spec:
       
       # Optional: Accept DNS configuration from Tailscale network (defaults to false)
       acceptDns: false
-    
     # Optional: Resource requirements for the Tailscale container
     resources:
       requests:
@@ -55,4 +57,3 @@ spec:
       limits:
         cpu: "200m"
         memory: "256Mi"
-
