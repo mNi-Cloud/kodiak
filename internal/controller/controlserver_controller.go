@@ -768,8 +768,8 @@ type controlServerDatabaseConfig struct {
 }
 
 type controlServerTLSConfig struct {
-	Disable    bool   `json:"disable,omitempty" yaml:"disable,omitempty"`
-	ForceHttps bool   `json:"force_https,omitempty" yaml:"force_https,omitempty"`
+	Disable    bool   `json:"disable" yaml:"disable"`
+	ForceHttps bool   `json:"force_https" yaml:"force_https"`
 	CertFile   string `json:"cert_file,omitempty" yaml:"cert_file,omitempty"`
 	KeyFile    string `json:"key_file,omitempty" yaml:"key_file,omitempty"`
 	Acme       bool   `json:"acme,omitempty" yaml:"acme,omitempty"`
