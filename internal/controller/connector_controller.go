@@ -472,12 +472,20 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 
 	// Determine if Deployment needs updates by comparing specs
 	needsUpdate := false
-	if !reflect.DeepEqual(deploy.Spec.Template.Spec.Containers[0].Env, found.Spec.Template.Spec.Containers[0].Env) {
+	desiredContainer := deploy.Spec.Template.Spec.Containers[0]
+	currentContainer := found.Spec.Template.Spec.Containers[0]
+
+	if desiredContainer.Image != currentContainer.Image {
+		needsUpdate = true
+		logger.Info("Container image needs update", "current", currentContainer.Image, "desired", desiredContainer.Image)
+	}
+
+	if !reflect.DeepEqual(desiredContainer.Env, currentContainer.Env) {
 		needsUpdate = true
 		logger.Info("Environment variables need update")
 	}
 
-	if !reflect.DeepEqual(deploy.Spec.Template.Spec.Containers[0].Resources, found.Spec.Template.Spec.Containers[0].Resources) {
+	if !reflect.DeepEqual(desiredContainer.Resources, currentContainer.Resources) {
 		needsUpdate = true
 		logger.Info("Resources need update")
 	}
@@ -487,8 +495,10 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 		logger.Info("Updating Deployment", "Name", found.Name)
 		// Create a copy to update
 		updatedDeploy := found.DeepCopy()
-		updatedDeploy.Spec.Template.Spec.Containers[0].Env = deploy.Spec.Template.Spec.Containers[0].Env
-		updatedDeploy.Spec.Template.Spec.Containers[0].Resources = deploy.Spec.Template.Spec.Containers[0].Resources
+		updatedContainer := &updatedDeploy.Spec.Template.Spec.Containers[0]
+		updatedContainer.Image = desiredContainer.Image
+		updatedContainer.Env = desiredContainer.Env
+		updatedContainer.Resources = desiredContainer.Resources
 
 		if err = r.Update(ctx, updatedDeploy); err != nil {
 			// If conflict occurred, log but don't return error
