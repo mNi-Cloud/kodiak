@@ -17,11 +17,17 @@ spec:
     tailscale:
       # Method 1: Using manual auth key
       # authKey: "tskey-auth-xxxxx"
-      
+
+      # Method 1-b: Using an existing Kubernetes secret (TS_AUTH_KEY)
+      # authKeySecretRef:
+      #   name: existing-tailscale-auth
+      #   key: TS_AUTH_KEY
+
       # Method 2: Using AuthKey resource (recommended)
       # This will automatically use the auth key from the referenced AuthKey resource
       authKeyRef:
         name: authkey-sample
+      # (The controller resolves status.secretRef and mounts TS_AUTH_KEY automatically)
       
       # Optional: Tailscale image version (defaults to "stable")
       version: "stable"

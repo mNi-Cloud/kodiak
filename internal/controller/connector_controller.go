@@ -45,7 +45,9 @@ import (
 const (
 	tailscaleDefaultImage = "tailscale/tailscale"
 	deploymentNameSuffix  = "-ts-connector"
-	secretName            = "tailscale-auth"
+	caBundleVolumeName    = "tailscale-custom-ca"
+	caBundleMountPath     = "/etc/tailscale/custom-ca"
+	authKeySecretKey      = "TS_AUTH_KEY"
 
 	// Condition types
 	conditionTypeReady              = "Ready"
@@ -59,6 +61,14 @@ const (
 	reasonDeploymentError       = "DeploymentError"
 	reasonTailscaleConnected    = "TailscaleConnected"
 	reasonTailscaleDisconnected = "TailscaleDisconnected"
+	reasonAuthKeyNotFound       = "AuthKeyNotFound"
+	reasonAuthKeyNotReady       = "AuthKeyNotReady"
+	reasonAuthKeySecretError    = "AuthKeySecretUnavailable"
+	reasonAuthKeyNotConfigured  = "AuthKeyNotConfigured"
+)
+
+var (
+	authKeyRequeueDelay = 10 * time.Second
 )
 
 // ConnectorReconciler reconciles a Connector object
@@ -128,6 +138,15 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		loginServer = controlServer.Status.Endpoint
 	}
 
+	authKeyEnv, authKeyResult, err := r.resolveAuthKeyEnv(ctx, &resource)
+	if err != nil {
+		logger.Error(err, "Failed to resolve auth key for connector")
+		return ctrl.Result{}, err
+	}
+	if authKeyResult.Requeue {
+		return authKeyResult, nil
+	}
+
 	// Check if Pod is running
 	podList := &corev1.PodList{}
 	listOpts := []client.ListOption{
@@ -154,7 +173,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Reconcile the Deployment for Tailscale connector
-	deployResult, err := r.reconcileDeployment(ctx, &resource, loginServer)
+	deployResult, err := r.reconcileDeployment(ctx, &resource, loginServer, authKeyEnv)
 	if err != nil {
 		logger.Error(err, "Unable to reconcile Deployment")
 		r.setCondition(&resource, conditionTypeDeploymentReady, metav1.ConditionFalse, reasonDeploymentError, err.Error())
@@ -242,7 +261,7 @@ func (r *ConnectorReconciler) handleDeletion(ctx context.Context, resource *v1al
 	}
 
 	// Cleanup resources
-	deploy := r.deploymentForConnector(resource, "")
+	deploy := r.deploymentForConnector(resource, "", corev1.EnvVar{Name: "TS_AUTH_KEY", Value: ""})
 	err := r.Delete(ctx, deploy)
 	if err != nil && !apierrors.IsNotFound(err) {
 		logger.Error(err, "Failed to delete deployment")
@@ -280,10 +299,78 @@ func (r *ConnectorReconciler) handleDeletion(ctx context.Context, resource *v1al
 	return ctrl.Result{}, nil
 }
 
+func (r *ConnectorReconciler) resolveAuthKeyEnv(ctx context.Context, resource *v1alpha1.Connector) (corev1.EnvVar, ctrl.Result, error) {
+	if resource.Spec.Spec.Tailscale.AuthKey != "" {
+		return corev1.EnvVar{
+			Name:  "TS_AUTH_KEY",
+			Value: resource.Spec.Spec.Tailscale.AuthKey,
+		}, ctrl.Result{}, nil
+	}
+
+	if resource.Spec.Spec.Tailscale.AuthKeyRef != nil && resource.Spec.Spec.Tailscale.AuthKeyRef.Name != "" {
+		var authKey v1alpha1.AuthKey
+		if err := r.Get(ctx, types.NamespacedName{Name: resource.Spec.Spec.Tailscale.AuthKeyRef.Name, Namespace: resource.Namespace}, &authKey); err != nil {
+			if apierrors.IsNotFound(err) {
+				r.setCondition(resource, conditionTypeReady, metav1.ConditionFalse, reasonAuthKeyNotFound, fmt.Sprintf("AuthKey %q not found", resource.Spec.Spec.Tailscale.AuthKeyRef.Name))
+				if updateErr := r.Status().Update(ctx, resource); updateErr != nil {
+					log.FromContext(ctx).Error(updateErr, "Unable to update connector status after auth key not found")
+				}
+				return corev1.EnvVar{}, ctrl.Result{RequeueAfter: authKeyRequeueDelay}, nil
+			}
+			return corev1.EnvVar{}, ctrl.Result{}, err
+		}
+
+		if !authKey.Status.Ready {
+			r.setCondition(resource, conditionTypeReady, metav1.ConditionFalse, reasonAuthKeyNotReady, fmt.Sprintf("AuthKey %q is not ready", authKey.Name))
+			if updateErr := r.Status().Update(ctx, resource); updateErr != nil {
+				log.FromContext(ctx).Error(updateErr, "Unable to update connector status while waiting for auth key readiness")
+			}
+			return corev1.EnvVar{}, ctrl.Result{RequeueAfter: authKeyRequeueDelay}, nil
+		}
+
+		if authKey.Status.SecretRef == nil || authKey.Status.SecretRef.Name == "" {
+			r.setCondition(resource, conditionTypeReady, metav1.ConditionFalse, reasonAuthKeySecretError, fmt.Sprintf("AuthKey %q does not provide a secret reference", authKey.Name))
+			if updateErr := r.Status().Update(ctx, resource); updateErr != nil {
+				log.FromContext(ctx).Error(updateErr, "Unable to update connector status after missing auth key secret reference")
+			}
+			return corev1.EnvVar{}, ctrl.Result{RequeueAfter: authKeyRequeueDelay}, nil
+		}
+
+		return corev1.EnvVar{
+			Name: "TS_AUTH_KEY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: authKey.Status.SecretRef.Name},
+					Key:                  authKeySecretKey,
+				},
+			},
+		}, ctrl.Result{}, nil
+	}
+
+	if resource.Spec.Spec.Tailscale.AuthKeySecretRef != nil && resource.Spec.Spec.Tailscale.AuthKeySecretRef.Name != "" {
+		selector := resource.Spec.Spec.Tailscale.AuthKeySecretRef.DeepCopy()
+		if selector.Key == "" {
+			selector.Key = authKeySecretKey
+		}
+		return corev1.EnvVar{
+			Name: "TS_AUTH_KEY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: selector,
+			},
+		}, ctrl.Result{}, nil
+	}
+
+	r.setCondition(resource, conditionTypeReady, metav1.ConditionFalse, reasonAuthKeyNotConfigured, "Provide spec.spec.tailscale.authKey, authKeySecretRef, or authKeyRef")
+	if updateErr := r.Status().Update(ctx, resource); updateErr != nil {
+		log.FromContext(ctx).Error(updateErr, "Unable to update connector status after missing auth key configuration")
+	}
+	return corev1.EnvVar{}, ctrl.Result{RequeueAfter: authKeyRequeueDelay}, nil
+}
+
 // reconcileDeployment creates or updates the Deployment for the Tailscale connector
-func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alpha1.Connector, loginServer string) (ctrl.Result, error) {
+func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alpha1.Connector, loginServer string, authKeyEnv corev1.EnvVar) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-	deploy := r.deploymentForConnector(cr, loginServer)
+	deploy := r.deploymentForConnector(cr, loginServer, authKeyEnv)
 
 	// Set controller reference
 	if err := controllerutil.SetControllerReference(cr, deploy, r.Scheme); err != nil {
@@ -373,7 +460,7 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 }
 
 // deploymentForConnector returns a Deployment for the Tailscale connector
-func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector, loginServer string) *appsv1.Deployment {
+func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector, loginServer string, authKeyEnv corev1.EnvVar) *appsv1.Deployment {
 	version := cr.Spec.Spec.Tailscale.Version
 	if version == "" {
 		version = "stable"
@@ -394,27 +481,7 @@ func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector, log
 	}
 
 	// Create environment variables for the container
-	env := []corev1.EnvVar{}
-
-	// Use authKey if specified directly, otherwise reference the secret
-	if cr.Spec.Spec.Tailscale.AuthKey != "" {
-		env = append(env, corev1.EnvVar{
-			Name:  "TS_AUTH_KEY",
-			Value: cr.Spec.Spec.Tailscale.AuthKey,
-		})
-	} else {
-		env = append(env, corev1.EnvVar{
-			Name: "TS_AUTH_KEY",
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: secretName,
-					},
-					Key: "TS_AUTH_KEY",
-				},
-			},
-		})
-	}
+	env := []corev1.EnvVar{authKeyEnv}
 
 	// Add POD_NAME and POD_UID for debugging Events
 	env = append(env, corev1.EnvVar{

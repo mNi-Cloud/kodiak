@@ -80,6 +80,10 @@ type TailscaleConfig struct {
 	AuthKey string `json:"authKey,omitempty"`
 
 	// +optional
+	// AuthKeySecretRef references an existing secret containing TS_AUTH_KEY (mutually exclusive with AuthKey and AuthKeyRef)
+	AuthKeySecretRef *corev1.SecretKeySelector `json:"authKeySecretRef,omitempty"`
+
+	// +optional
 	// AuthKeyRef references an AuthKey resource to use for authentication
 	AuthKeyRef *corev1.LocalObjectReference `json:"authKeyRef,omitempty"`
 
