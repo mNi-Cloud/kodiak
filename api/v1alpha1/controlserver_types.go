@@ -75,6 +75,10 @@ type ControlServerConfig struct {
 	PublicAddr string `json:"publicAddr,omitempty"`
 
 	// +optional
+	// StunPublicAddr is the publicly reachable STUN address
+	StunPublicAddr string `json:"stunPublicAddr,omitempty"`
+
+	// +optional
 	// Database configuration
 	Database DatabaseConfig `json:"database,omitempty"`
 
@@ -93,6 +97,18 @@ type ControlServerConfig struct {
 	// +optional
 	// Auth configuration for OIDC
 	Auth *AuthConfig `json:"auth,omitempty"`
+
+	// +optional
+	// Keys configuration
+	Keys *KeysConfig `json:"keys,omitempty"`
+
+	// +optional
+	// PollNet configuration
+	PollNet *PollNetConfig `json:"pollNet,omitempty"`
+
+	// +optional
+	// Logging configuration
+	Logging *LoggingConfig `json:"logging,omitempty"`
 }
 
 // DatabaseConfig defines database settings
@@ -120,12 +136,28 @@ type TLSConfig struct {
 	CertSecretName string `json:"certSecretName,omitempty"`
 
 	// +optional
+	// CertFile path when providing TLS cert via filesystem
+	CertFile string `json:"certFile,omitempty"`
+
+	// +optional
+	// KeyFile path when providing TLS key via filesystem
+	KeyFile string `json:"keyFile,omitempty"`
+
+	// +optional
 	// AcmeEnabled enables automatic certificate management
 	AcmeEnabled bool `json:"acmeEnabled,omitempty"`
 
 	// +optional
 	// AcmeEmail for Let's Encrypt registration
 	AcmeEmail string `json:"acmeEmail,omitempty"`
+
+	// +optional
+	// AcmeCA overrides the default ACME directory endpoint
+	AcmeCA string `json:"acmeCa,omitempty"`
+
+	// +optional
+	// AcmePath for storing ACME generated artifacts
+	AcmePath string `json:"acmePath,omitempty"`
 
 	// +kubebuilder:default=true
 	// +optional
@@ -135,6 +167,10 @@ type TLSConfig struct {
 
 // DERPConfig defines DERP server settings
 type DERPConfig struct {
+	// +optional
+	// Sources to fetch DERP map updates from
+	Sources []string `json:"sources,omitempty"`
+
 	// +optional
 	// +kubebuilder:default=false
 	// Disabled flag for embedded DERP server
@@ -162,6 +198,25 @@ type DNSConfig struct {
 	// +kubebuilder:default="tailnet.local"
 	// MagicDNSSuffix for the tailnet
 	MagicDNSSuffix string `json:"magicDnsSuffix,omitempty"`
+
+	// +optional
+	// Provider configuration for DNS integrations
+	Provider *DNSProviderConfig `json:"provider,omitempty"`
+}
+
+// DNSProviderConfig defines external DNS provider configuration
+type DNSProviderConfig struct {
+	// +optional
+	// Provider name
+	Name string `json:"name,omitempty"`
+
+	// +optional
+	// Zone managed by the provider
+	Zone string `json:"zone,omitempty"`
+
+	// +optional
+	// Arbitrary provider configuration key/value pairs
+	Config map[string]string `json:"config,omitempty"`
 }
 
 // AuthConfig defines authentication settings
@@ -169,6 +224,10 @@ type AuthConfig struct {
 	// +optional
 	// OIDC provider configuration
 	OIDC *OIDCConfig `json:"oidc,omitempty"`
+
+	// +optional
+	// System admin configuration
+	SystemAdmins *SystemAdminsConfig `json:"systemAdmins,omitempty"`
 }
 
 // OIDCConfig defines OIDC provider settings
@@ -187,6 +246,21 @@ type OIDCConfig struct {
 	AdditionalScopes []string `json:"additionalScopes,omitempty"`
 }
 
+// SystemAdminsConfig defines configuration for granting system admin privileges
+type SystemAdminsConfig struct {
+	// +optional
+	// Emails of users that should be system administrators
+	Emails []string `json:"emails,omitempty"`
+
+	// +optional
+	// Subject claims of users that should be system administrators
+	Subs []string `json:"subs,omitempty"`
+
+	// +optional
+	// Additional filters encoded as BEXPR expressions
+	Filters []string `json:"filters,omitempty"`
+}
+
 // StorageConfig defines storage settings
 type StorageConfig struct {
 	// +optional
@@ -197,6 +271,35 @@ type StorageConfig struct {
 	// +optional
 	// StorageClassName for the PVC
 	StorageClassName string `json:"storageClassName,omitempty"`
+}
+
+// KeysConfig defines configuration for static keys
+type KeysConfig struct {
+	// +optional
+	// SystemAdminKey provides a static admin key
+	SystemAdminKey string `json:"systemAdminKey,omitempty"`
+}
+
+// PollNetConfig captures polling network settings
+type PollNetConfig struct {
+	// +optional
+	// KeepAliveInterval configures device keep alive frequency
+	KeepAliveInterval string `json:"keepAliveInterval,omitempty"`
+}
+
+// LoggingConfig defines logging preferences
+type LoggingConfig struct {
+	// +optional
+	// Format specifies log output formatting
+	Format string `json:"format,omitempty"`
+
+	// +optional
+	// Level sets the log verbosity level
+	Level string `json:"level,omitempty"`
+
+	// +optional
+	// File writes logs to the specified file path
+	File string `json:"file,omitempty"`
 }
 
 // ControlServerStatus defines the observed state of ControlServer.

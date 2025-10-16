@@ -609,12 +609,20 @@ func renderControlServerConfig(resource *kodiakv1alpha1.ControlServer, includeAd
 		tls := &controlServerTLSConfig{
 			Disable:    spec.Config.TLS.Disable,
 			ForceHttps: spec.Config.TLS.ForceHTTPS,
+			CertFile:   spec.Config.TLS.CertFile,
+			KeyFile:    spec.Config.TLS.KeyFile,
 			Acme:       spec.Config.TLS.AcmeEnabled,
 			AcmeEmail:  spec.Config.TLS.AcmeEmail,
+			AcmeCA:     spec.Config.TLS.AcmeCA,
+			AcmePath:   spec.Config.TLS.AcmePath,
 		}
 		if spec.Config.TLS.CertSecretName != "" {
-			tls.CertFile = "/etc/ionscale/tls/tls.crt"
-			tls.KeyFile = "/etc/ionscale/tls/tls.key"
+			if tls.CertFile == "" {
+				tls.CertFile = "/etc/ionscale/tls/tls.crt"
+			}
+			if tls.KeyFile == "" {
+				tls.KeyFile = "/etc/ionscale/tls/tls.key"
+			}
 		}
 		cfg.TLS = tls
 	}
@@ -627,36 +635,89 @@ func renderControlServerConfig(resource *kodiakv1alpha1.ControlServer, includeAd
 				RegionCode: spec.Config.DERP.RegionCode,
 				RegionName: spec.Config.DERP.RegionName,
 			},
+			Sources: spec.Config.DERP.Sources,
 		}
 	}
 
 	if spec.Config.DNS != nil {
-		cfg.DNS = &controlServerDNSConfig{
+		dns := &controlServerDNSConfig{
 			MagicDNSSuffix: spec.Config.DNS.MagicDNSSuffix,
 		}
+		if spec.Config.DNS.Provider != nil {
+			dns.Provider = &controlServerDNSProviderConfig{
+				Name:   spec.Config.DNS.Provider.Name,
+				Zone:   spec.Config.DNS.Provider.Zone,
+				Config: spec.Config.DNS.Provider.Config,
+			}
+		}
+		cfg.DNS = dns
 	}
 
+	var keys *controlServerKeysConfig
 	if includeAdminKey {
-		cfg.Keys = &controlServerKeysConfig{
+		keys = &controlServerKeysConfig{
 			SystemAdminKey: fmt.Sprintf("${%s}", ionscaleAdminKeyEnv),
 		}
 	}
+	if spec.Config.Keys != nil && spec.Config.Keys.SystemAdminKey != "" {
+		if keys == nil {
+			keys = &controlServerKeysConfig{}
+		}
+		keys.SystemAdminKey = spec.Config.Keys.SystemAdminKey
+	}
+	if keys != nil && keys.SystemAdminKey != "" {
+		cfg.Keys = keys
+	}
 
-	if auth != nil && auth.OIDC != nil {
-		oidc := &controlServerOIDCConfig{
-			Issuer:           auth.OIDC.Issuer,
-			ClientID:         auth.OIDC.ClientID,
-			AdditionalScopes: auth.OIDC.AdditionalScopes,
+	if spec.Config.PollNet != nil {
+		cfg.PollNet = &controlServerPollNetConfig{
+			KeepAliveInterval: spec.Config.PollNet.KeepAliveInterval,
 		}
-		if includeOIDCSecret {
-			oidc.ClientSecret = fmt.Sprintf("${%s}", oidcClientSecretEnv)
+	}
+
+	if spec.Config.Logging != nil {
+		cfg.Logging = &controlServerLoggingConfig{
+			Format: spec.Config.Logging.Format,
+			Level:  spec.Config.Logging.Level,
+			File:   spec.Config.Logging.File,
 		}
-		cfg.Auth = &controlServerAuthConfig{Provider: oidc}
+	}
+
+	if auth != nil {
+		authCfg := &controlServerAuthConfig{}
+
+		if auth.OIDC != nil {
+			oidc := &controlServerOIDCConfig{
+				Issuer:           auth.OIDC.Issuer,
+				ClientID:         auth.OIDC.ClientID,
+				AdditionalScopes: auth.OIDC.AdditionalScopes,
+			}
+			if includeOIDCSecret {
+				oidc.ClientSecret = fmt.Sprintf("${%s}", oidcClientSecretEnv)
+			}
+			authCfg.Provider = oidc
+		}
+
+		if auth.SystemAdmins != nil {
+			authCfg.SystemAdmins = &controlServerSystemAdminsConfig{
+				Emails:  auth.SystemAdmins.Emails,
+				Subs:    auth.SystemAdmins.Subs,
+				Filters: auth.SystemAdmins.Filters,
+			}
+		}
+
+		if authCfg.Provider != nil || authCfg.SystemAdmins != nil {
+			cfg.Auth = authCfg
+		}
 	}
 
 	publicAddr, stunAddr := computeControlServerAddresses(resource)
 	cfg.PublicAddr = publicAddr
-	cfg.StunPublicAddr = stunAddr
+	if spec.Config.StunPublicAddr != "" {
+		cfg.StunPublicAddr = spec.Config.StunPublicAddr
+	} else {
+		cfg.StunPublicAddr = stunAddr
+	}
 
 	content, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -760,6 +821,8 @@ type controlServerConfig struct {
 	DNS               *controlServerDNSConfig      `json:"dns,omitempty" yaml:"dns,omitempty"`
 	Auth              *controlServerAuthConfig     `json:"auth,omitempty" yaml:"auth,omitempty"`
 	Keys              *controlServerKeysConfig     `json:"keys,omitempty" yaml:"keys,omitempty"`
+	PollNet           *controlServerPollNetConfig  `json:"poll_net,omitempty" yaml:"poll_net,omitempty"`
+	Logging           *controlServerLoggingConfig  `json:"logging,omitempty" yaml:"logging,omitempty"`
 }
 
 type controlServerDatabaseConfig struct {
@@ -774,10 +837,13 @@ type controlServerTLSConfig struct {
 	KeyFile    string `json:"key_file,omitempty" yaml:"key_file,omitempty"`
 	Acme       bool   `json:"acme,omitempty" yaml:"acme,omitempty"`
 	AcmeEmail  string `json:"acme_email,omitempty" yaml:"acme_email,omitempty"`
+	AcmeCA     string `json:"acme_ca,omitempty" yaml:"acme_ca,omitempty"`
+	AcmePath   string `json:"acme_path,omitempty" yaml:"acme_path,omitempty"`
 }
 
 type controlServerDERPConfig struct {
-	Server *controlServerDERPServerConfig `json:"server,omitempty" yaml:"server,omitempty"`
+	Server  *controlServerDERPServerConfig `json:"server,omitempty" yaml:"server,omitempty"`
+	Sources []string                       `json:"sources,omitempty" yaml:"sources,omitempty"`
 }
 
 type controlServerDERPServerConfig struct {
@@ -788,11 +854,19 @@ type controlServerDERPServerConfig struct {
 }
 
 type controlServerDNSConfig struct {
-	MagicDNSSuffix string `json:"magic_dns_suffix,omitempty" yaml:"magic_dns_suffix,omitempty"`
+	MagicDNSSuffix string                          `json:"magic_dns_suffix,omitempty" yaml:"magic_dns_suffix,omitempty"`
+	Provider       *controlServerDNSProviderConfig `json:"provider,omitempty" yaml:"provider,omitempty"`
+}
+
+type controlServerDNSProviderConfig struct {
+	Name   string            `json:"name,omitempty" yaml:"name,omitempty"`
+	Zone   string            `json:"zone,omitempty" yaml:"zone,omitempty"`
+	Config map[string]string `json:"config,omitempty" yaml:"config,omitempty"`
 }
 
 type controlServerAuthConfig struct {
-	Provider *controlServerOIDCConfig `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Provider     *controlServerOIDCConfig         `json:"provider,omitempty" yaml:"provider,omitempty"`
+	SystemAdmins *controlServerSystemAdminsConfig `json:"system_admins,omitempty" yaml:"system_admins,omitempty"`
 }
 
 type controlServerOIDCConfig struct {
@@ -804,6 +878,22 @@ type controlServerOIDCConfig struct {
 
 type controlServerKeysConfig struct {
 	SystemAdminKey string `json:"system_admin_key,omitempty" yaml:"system_admin_key,omitempty"`
+}
+
+type controlServerSystemAdminsConfig struct {
+	Emails  []string `json:"emails,omitempty" yaml:"emails,omitempty"`
+	Subs    []string `json:"subs,omitempty" yaml:"subs,omitempty"`
+	Filters []string `json:"filters,omitempty" yaml:"filters,omitempty"`
+}
+
+type controlServerPollNetConfig struct {
+	KeepAliveInterval string `json:"keep_alive_interval,omitempty" yaml:"keep_alive_interval,omitempty"`
+}
+
+type controlServerLoggingConfig struct {
+	Format string `json:"format,omitempty" yaml:"format,omitempty"`
+	Level  string `json:"level,omitempty" yaml:"level,omitempty"`
+	File   string `json:"file,omitempty" yaml:"file,omitempty"`
 }
 
 func computeControlServerAddresses(resource *kodiakv1alpha1.ControlServer) (string, string) {

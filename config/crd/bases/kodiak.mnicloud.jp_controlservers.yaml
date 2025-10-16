@@ -105,6 +105,26 @@ spec:
                         - clientSecretRef
                         - issuer
                         type: object
+                      systemAdmins:
+                        description: System admin configuration
+                        properties:
+                          emails:
+                            description: Emails of users that should be system administrators
+                            items:
+                              type: string
+                            type: array
+                          filters:
+                            description: Additional filters encoded as BEXPR expressions
+                            items:
+                              type: string
+                            type: array
+                          subs:
+                            description: Subject claims of users that should be system
+                              administrators
+                            items:
+                              type: string
+                            type: array
+                        type: object
                     type: object
                   database:
                     description: Database configuration
@@ -139,6 +159,11 @@ spec:
                         default: Kodiak Embedded DERP
                         description: RegionName for the DERP region
                         type: string
+                      sources:
+                        description: Sources to fetch DERP map updates from
+                        items:
+                          type: string
+                        type: array
                     type: object
                   dns:
                     description: DNS configuration
@@ -147,15 +172,59 @@ spec:
                         default: tailnet.local
                         description: MagicDNSSuffix for the tailnet
                         type: string
+                      provider:
+                        description: Provider configuration for DNS integrations
+                        properties:
+                          config:
+                            additionalProperties:
+                              type: string
+                            description: Arbitrary provider configuration key/value
+                              pairs
+                            type: object
+                          name:
+                            description: Provider name
+                            type: string
+                          zone:
+                            description: Zone managed by the provider
+                            type: string
+                        type: object
+                    type: object
+                  keys:
+                    description: Keys configuration
+                    properties:
+                      systemAdminKey:
+                        description: SystemAdminKey provides a static admin key
+                        type: string
                     type: object
                   listenAddr:
                     default: :8080
                     description: ListenAddr for the control server API
                     type: string
+                  logging:
+                    description: Logging configuration
+                    properties:
+                      file:
+                        description: File writes logs to the specified file path
+                        type: string
+                      format:
+                        description: Format specifies log output formatting
+                        type: string
+                      level:
+                        description: Level sets the log verbosity level
+                        type: string
+                    type: object
                   metricsListenAddr:
                     default: :9091
                     description: MetricsListenAddr for metrics endpoint
                     type: string
+                  pollNet:
+                    description: PollNet configuration
+                    properties:
+                      keepAliveInterval:
+                        description: KeepAliveInterval configures device keep alive
+                          frequency
+                        type: string
+                    type: object
                   publicAddr:
                     description: PublicAddr is the public address for the control
                       server
@@ -164,15 +233,27 @@ spec:
                     default: :3478
                     description: StunListenAddr for STUN server
                     type: string
+                  stunPublicAddr:
+                    description: StunPublicAddr is the publicly reachable STUN address
+                    type: string
                   tls:
                     description: TLS configuration
                     properties:
+                      acmeCa:
+                        description: AcmeCA overrides the default ACME directory endpoint
+                        type: string
                       acmeEmail:
                         description: AcmeEmail for Let's Encrypt registration
                         type: string
                       acmeEnabled:
                         description: AcmeEnabled enables automatic certificate management
                         type: boolean
+                      acmePath:
+                        description: AcmePath for storing ACME generated artifacts
+                        type: string
+                      certFile:
+                        description: CertFile path when providing TLS cert via filesystem
+                        type: string
                       certSecretName:
                         description: CertSecretName references a secret containing
                           TLS cert and key
@@ -186,6 +267,9 @@ spec:
                         description: ForceHTTPS redirects HTTP requests to HTTPS when
                           TLS is enabled
                         type: boolean
+                      keyFile:
+                        description: KeyFile path when providing TLS key via filesystem
+                        type: string
                     type: object
                 type: object
               image:
