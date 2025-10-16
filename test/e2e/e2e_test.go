@@ -260,15 +260,19 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
 
 			By("waiting for the curl-metrics pod to complete.")
-			verifyCurlUp := func(g Gomega) {
+			Eventually(func() error {
 				cmd := exec.Command("kubectl", "get", "pods", "curl-metrics",
 					"-o", "jsonpath={.status.phase}",
 					"-n", namespace)
 				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Succeeded"), "curl pod in wrong status")
-			}
-			Eventually(verifyCurlUp, 5*time.Minute).Should(Succeed())
+				if err != nil {
+					return err
+				}
+				if output != "Succeeded" {
+					return fmt.Errorf("curl pod in wrong status: %s", output)
+				}
+				return nil
+			}).WithTimeout(5 * time.Minute).Should(Succeed())
 
 			By("getting the metrics by checking curl-metrics logs")
 			metricsOutput := getMetricsOutput()
@@ -308,7 +312,7 @@ func serviceAccountToken() (string, error) {
 	}
 
 	var out string
-	verifyTokenCreation := func(g Gomega) {
+	Eventually(func() error {
 		// Execute kubectl command to create the token
 		cmd := exec.Command("kubectl", "create", "--raw", fmt.Sprintf(
 			"/api/v1/namespaces/%s/serviceaccounts/%s/token",
@@ -316,17 +320,24 @@ func serviceAccountToken() (string, error) {
 			serviceAccountName,
 		), "-f", tokenRequestFile)
 
-		output, err := cmd.CombinedOutput()
-		g.Expect(err).NotTo(HaveOccurred())
+		output, combinedOutputErr := cmd.CombinedOutput()
+		if combinedOutputErr != nil {
+			return combinedOutputErr
+		}
 
 		// Parse the JSON output to extract the token
 		var token tokenRequest
-		err = json.Unmarshal(output, &token)
-		g.Expect(err).NotTo(HaveOccurred())
+		unmarshalErr := json.Unmarshal(output, &token)
+		if unmarshalErr != nil {
+			return unmarshalErr
+		}
 
 		out = token.Status.Token
-	}
-	Eventually(verifyTokenCreation).Should(Succeed())
+		if out == "" {
+			return fmt.Errorf("service account token is empty")
+		}
+		return nil
+	}).Should(Succeed())
 
 	return out, err
 }
