@@ -143,22 +143,26 @@ spec:
                   derp:
                     description: DERP server configuration
                     properties:
-                      disabled:
-                        default: false
-                        description: Disabled flag for embedded DERP server
-                        type: boolean
-                      regionCode:
-                        default: kodiak
-                        description: RegionCode for the DERP region
-                        type: string
-                      regionId:
-                        default: 1000
-                        description: RegionID for the DERP region
-                        type: integer
-                      regionName:
-                        default: Kodiak Embedded DERP
-                        description: RegionName for the DERP region
-                        type: string
+                      server:
+                        description: Server configuration for embedded DERP
+                        properties:
+                          disabled:
+                            default: false
+                            description: Disabled flag for embedded DERP server
+                            type: boolean
+                          regionCode:
+                            default: kodiak
+                            description: RegionCode for the DERP region
+                            type: string
+                          regionId:
+                            default: 1000
+                            description: RegionID for the DERP region
+                            type: integer
+                          regionName:
+                            default: Kodiak Embedded DERP
+                            description: RegionName for the DERP region
+                            type: string
+                        type: object
                       sources:
                         description: Sources to fetch DERP map updates from
                         items:

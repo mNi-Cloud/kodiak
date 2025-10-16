@@ -628,15 +628,18 @@ func renderControlServerConfig(resource *kodiakv1alpha1.ControlServer, includeAd
 	}
 
 	if spec.Config.DERP != nil {
-		cfg.DERP = &controlServerDERPConfig{
-			Server: &controlServerDERPServerConfig{
-				Disabled:   spec.Config.DERP.Disabled,
-				RegionID:   spec.Config.DERP.RegionID,
-				RegionCode: spec.Config.DERP.RegionCode,
-				RegionName: spec.Config.DERP.RegionName,
-			},
+		derp := &controlServerDERPConfig{
 			Sources: spec.Config.DERP.Sources,
 		}
+		if spec.Config.DERP.Server != nil {
+			derp.Server = &controlServerDERPServerConfig{
+				Disabled:   spec.Config.DERP.Server.Disabled,
+				RegionID:   spec.Config.DERP.Server.RegionID,
+				RegionCode: spec.Config.DERP.Server.RegionCode,
+				RegionName: spec.Config.DERP.Server.RegionName,
+			}
+		}
+		cfg.DERP = derp
 	}
 
 	if spec.Config.DNS != nil {

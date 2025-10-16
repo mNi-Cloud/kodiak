@@ -168,9 +168,16 @@ type TLSConfig struct {
 // DERPConfig defines DERP server settings
 type DERPConfig struct {
 	// +optional
+	// Server configuration for embedded DERP
+	Server *DERPServerConfig `json:"server,omitempty"`
+
+	// +optional
 	// Sources to fetch DERP map updates from
 	Sources []string `json:"sources,omitempty"`
+}
 
+// DERPServerConfig defines settings for the embedded DERP server
+type DERPServerConfig struct {
 	// +optional
 	// +kubebuilder:default=false
 	// Disabled flag for embedded DERP server

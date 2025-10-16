@@ -20,10 +20,13 @@ spec:
       disable: false
       acmeEnabled: false
     derp:
-      disabled: false
-      regionId: 1000
-      regionCode: "kodiak"
-      regionName: "Kodiak Embedded DERP"
+      server:
+        disabled: true
+        regionId: 1000
+        regionCode: "kodiak"
+        regionName: "Kodiak Embedded DERP"
+      sources:
+        - https://controlplane.tailscale.com/derpmap/default
     dns:
       magicDnsSuffix: "tailnet.local"
   storage:
