@@ -44,6 +44,11 @@ import (
 	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
 )
 
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
 // ControlServerReconciler reconciles a ControlServer object
 type ControlServerReconciler struct {
 	client.Client
@@ -125,7 +130,7 @@ func (r *ControlServerReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	if err := r.reconcileDeployment(ctx, &resource, portCfg, configHash, adminSecret, oidcSecret); err != nil {
+	if err := r.reconcileDeployment(ctx, &resource, portCfg, configHash, adminSecret); err != nil {
 		logger.Error(err, "failed to reconcile deployment")
 		r.updateStatusWithError(ctx, &resource, "DeploymentError", err)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -320,7 +325,7 @@ func (r *ControlServerReconciler) reconcileService(ctx context.Context, resource
 	return err
 }
 
-func (r *ControlServerReconciler) reconcileDeployment(ctx context.Context, resource *kodiakv1alpha1.ControlServer, ports portConfiguration, configHash string, adminSecret *corev1.Secret, oidcSecret *corev1.Secret) error {
+func (r *ControlServerReconciler) reconcileDeployment(ctx context.Context, resource *kodiakv1alpha1.ControlServer, ports portConfiguration, configHash string, adminSecret *corev1.Secret) error {
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      deploymentName(resource),
@@ -731,9 +736,9 @@ func renderControlServerConfig(resource *kodiakv1alpha1.ControlServer, includeAd
 }
 
 func controlServerEndpoint(resource *kodiakv1alpha1.ControlServer, ports portConfiguration) string {
-	scheme := "https"
+	scheme := schemeHTTPS
 	if resource.Spec.Config.TLS != nil && resource.Spec.Config.TLS.Disable {
-		scheme = "http"
+		scheme = schemeHTTP
 	}
 
 	if resource.Spec.Config.PublicAddr != "" {
@@ -922,16 +927,16 @@ func sanitizePublicAddr(candidate string, tlsConfig *kodiakv1alpha1.TLSConfig, n
 		return fmt.Sprintf("%s:%d", host, listenPort)
 	}
 
-	scheme := "https"
+	scheme := schemeHTTPS
 	if tlsConfig != nil && tlsConfig.Disable {
-		scheme = "http"
+		scheme = schemeHTTP
 	}
 
 	addr := trimScheme(candidate)
 
 	if _, _, err := net.SplitHostPort(addr); err != nil {
 		defaultPort := 443
-		if scheme == "http" {
+		if scheme == schemeHTTP {
 			defaultPort = 80
 		}
 		addr = fmt.Sprintf("%s:%d", addr, defaultPort)

@@ -65,8 +65,8 @@ const (
 	reasonTailscaleDisconnected = "TailscaleDisconnected"
 	reasonAuthKeyNotFound       = "AuthKeyNotFound"
 	reasonAuthKeyNotReady       = "AuthKeyNotReady"
-	reasonAuthKeySecretError   = "AuthKeySecretUnavailable"
-	reasonAuthKeyNotConfigured = "AuthKeyNotConfigured"
+	reasonAuthKeySecretError    = "AuthKeySecretUnavailable"
+	reasonAuthKeyNotConfigured  = "AuthKeyNotConfigured"
 )
 
 var (

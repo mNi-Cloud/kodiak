@@ -58,6 +58,10 @@ const (
 	defaultAuthKeyRequeue     = 6 * time.Hour
 	dependentNotReadyRequeue  = 30 * time.Second
 	rotationRetryRequeue      = 30 * time.Second
+
+	phaseReady   = "Ready"
+	phasePending = "Pending"
+	phaseError   = "Error"
 )
 
 // AuthKeyReconciler reconciles a AuthKey object
@@ -70,6 +74,7 @@ type AuthKeyReconciler struct {
 // +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=authkeys/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=authkeys/finalizers,verbs=update
 
+// nolint:gocyclo // the reconciliation flow is complex and already factored into helpers where practical
 func (r *AuthKeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("authkey", req.NamespacedName)
 
@@ -372,7 +377,7 @@ func (r *AuthKeyReconciler) setReadyStatus(ctx context.Context, resource *kodiak
 		Message:            message,
 	})
 	resource.Status.Ready = true
-	resource.Status.Phase = "Ready"
+	resource.Status.Phase = phaseReady
 	resource.Status.KeyID = remote.GetId()
 	resource.Status.SecretRef = &corev1.LocalObjectReference{Name: secretName}
 	resource.Status.CreatedAt = convertTimestamp(remote.GetCreatedAt())
@@ -397,7 +402,7 @@ func (r *AuthKeyReconciler) setPendingStatus(ctx context.Context, resource *kodi
 		Message:            message,
 	})
 	resource.Status.Ready = false
-	resource.Status.Phase = "Pending"
+	resource.Status.Phase = phasePending
 
 	if equality.Semantic.DeepEqual(current.Status, resource.Status) {
 		return nil
@@ -423,7 +428,7 @@ func (r *AuthKeyReconciler) setErrorStatus(ctx context.Context, resource *kodiak
 		Message:            message,
 	})
 	resource.Status.Ready = false
-	resource.Status.Phase = "Error"
+	resource.Status.Phase = phaseError
 
 	if equality.Semantic.DeepEqual(current.Status, resource.Status) {
 		return nil
@@ -468,7 +473,7 @@ func (r *AuthKeyReconciler) resetAuthKeyStatus(ctx context.Context, resource *ko
 		Message:            message,
 	})
 	resource.Status.Ready = false
-	resource.Status.Phase = "Pending"
+	resource.Status.Phase = phasePending
 	resource.Status.KeyID = 0
 	resource.Status.SecretRef = nil
 	resource.Status.CreatedAt = nil
