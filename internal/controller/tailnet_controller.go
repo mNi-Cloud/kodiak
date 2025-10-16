@@ -493,7 +493,11 @@ func deriveControlServerEndpoint(controlServer *kodiakv1alpha1.ControlServer) (s
 	disableTLS := controlServer.Spec.Config.TLS != nil && controlServer.Spec.Config.TLS.Disable
 	skipVerify := false
 
-	if !disableTLS && strings.HasPrefix(endpoint, "https://") {
+	if disableTLS {
+		return endpoint, false
+	}
+
+	if strings.HasPrefix(endpoint, "https://") {
 		host := endpoint[len("https://"):]
 		if idx := strings.Index(host, "/"); idx >= 0 {
 			host = host[:idx]
@@ -501,13 +505,6 @@ func deriveControlServerEndpoint(controlServer *kodiakv1alpha1.ControlServer) (s
 		if strings.Contains(host, ".svc.") || strings.Contains(host, ".cluster.local") {
 			skipVerify = true
 		}
-		if controlServer.Spec.Config.TLS != nil && controlServer.Spec.Config.TLS.CertSecretName != "" {
-			skipVerify = true
-		}
-	}
-
-	if disableTLS {
-		skipVerify = false
 	}
 
 	return endpoint, skipVerify
