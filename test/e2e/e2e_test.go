@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -140,7 +141,7 @@ var _ = Describe("Manager", Ordered, func() {
 	Context("Manager", func() {
 		It("should run successfully", func() {
 			By("validating that the controller-manager pod is running as expected")
-			verifyControllerUp := func(g Gomega) {
+			verifyControllerUp := func() error {
 				// Get the name of the controller-manager pod
 				cmd := exec.Command("kubectl", "get",
 					"pods", "-l", "control-plane=controller-manager",
@@ -152,11 +153,17 @@ var _ = Describe("Manager", Ordered, func() {
 				)
 
 				podOutput, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred(), "Failed to retrieve controller-manager pod information")
+				if err != nil {
+					return fmt.Errorf("failed to retrieve controller-manager pod information: %w", err)
+				}
 				podNames := utils.GetNonEmptyLines(podOutput)
-				g.Expect(podNames).To(HaveLen(1), "expected 1 controller pod running")
+				if len(podNames) != 1 {
+					return fmt.Errorf("expected 1 controller pod running, got %d", len(podNames))
+				}
 				controllerPodName = podNames[0]
-				g.Expect(controllerPodName).To(ContainSubstring("controller-manager"))
+				if !strings.Contains(controllerPodName, "controller-manager") {
+					return fmt.Errorf("pod name %s does not contain 'controller-manager'", controllerPodName)
+				}
 
 				// Validate the pod's status
 				cmd = exec.Command("kubectl", "get",
@@ -164,10 +171,15 @@ var _ = Describe("Manager", Ordered, func() {
 					"-n", namespace,
 				)
 				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Running"), "Incorrect controller-manager pod status")
+				if err != nil {
+					return fmt.Errorf("failed to get pod status: %w", err)
+				}
+				if output != "Running" {
+					return fmt.Errorf("incorrect controller-manager pod status: %s", output)
+				}
+				return nil
 			}
-			Eventually(verifyControllerUp).Should(Succeed())
+			Eventually(verifyControllerUp).WithTimeout(time.Minute).WithPolling(time.Second).Should(Succeed())
 		})
 
 		It("should ensure the metrics endpoint is serving metrics", func() {
@@ -190,23 +202,32 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(token).NotTo(BeEmpty())
 
 			By("waiting for the metrics endpoint to be ready")
-			verifyMetricsEndpointReady := func(g Gomega) {
+			verifyMetricsEndpointReady := func() error {
 				cmd := exec.Command("kubectl", "get", "endpoints", metricsServiceName, "-n", namespace)
 				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("8443"), "Metrics endpoint is not ready")
+				if err != nil {
+					return fmt.Errorf("failed to get endpoints: %w", err)
+				}
+				if !strings.Contains(output, "8443") {
+					return fmt.Errorf("metrics endpoint is not ready")
+				}
+				return nil
 			}
-			Eventually(verifyMetricsEndpointReady).Should(Succeed())
+			Eventually(verifyMetricsEndpointReady).WithTimeout(time.Minute).WithPolling(time.Second).Should(Succeed())
 
 			By("verifying that the controller manager is serving the metrics server")
-			verifyMetricsServerStarted := func(g Gomega) {
+			verifyMetricsServerStarted := func() error {
 				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
 				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("controller-runtime.metrics\tServing metrics server"),
-					"Metrics server not yet started")
+				if err != nil {
+					return fmt.Errorf("failed to get logs: %w", err)
+				}
+				if !strings.Contains(output, "controller-runtime.metrics\tServing metrics server") {
+					return fmt.Errorf("metrics server not yet started")
+				}
+				return nil
 			}
-			Eventually(verifyMetricsServerStarted).Should(Succeed())
+			Eventually(verifyMetricsServerStarted).WithTimeout(time.Minute).WithPolling(time.Second).Should(Succeed())
 
 			By("creating the curl-metrics pod to access the metrics endpoint")
 			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
@@ -239,15 +260,19 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
 
 			By("waiting for the curl-metrics pod to complete.")
-			verifyCurlUp := func(g Gomega) {
+			Eventually(func() error {
 				cmd := exec.Command("kubectl", "get", "pods", "curl-metrics",
 					"-o", "jsonpath={.status.phase}",
 					"-n", namespace)
 				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Succeeded"), "curl pod in wrong status")
-			}
-			Eventually(verifyCurlUp, 5*time.Minute).Should(Succeed())
+				if err != nil {
+					return err
+				}
+				if output != "Succeeded" {
+					return fmt.Errorf("curl pod in wrong status: %s", output)
+				}
+				return nil
+			}).WithTimeout(5 * time.Minute).Should(Succeed())
 
 			By("getting the metrics by checking curl-metrics logs")
 			metricsOutput := getMetricsOutput()
@@ -287,7 +312,7 @@ func serviceAccountToken() (string, error) {
 	}
 
 	var out string
-	verifyTokenCreation := func(g Gomega) {
+	Eventually(func() error {
 		// Execute kubectl command to create the token
 		cmd := exec.Command("kubectl", "create", "--raw", fmt.Sprintf(
 			"/api/v1/namespaces/%s/serviceaccounts/%s/token",
@@ -295,17 +320,24 @@ func serviceAccountToken() (string, error) {
 			serviceAccountName,
 		), "-f", tokenRequestFile)
 
-		output, err := cmd.CombinedOutput()
-		g.Expect(err).NotTo(HaveOccurred())
+		output, combinedOutputErr := cmd.CombinedOutput()
+		if combinedOutputErr != nil {
+			return combinedOutputErr
+		}
 
 		// Parse the JSON output to extract the token
 		var token tokenRequest
-		err = json.Unmarshal(output, &token)
-		g.Expect(err).NotTo(HaveOccurred())
+		unmarshalErr := json.Unmarshal(output, &token)
+		if unmarshalErr != nil {
+			return unmarshalErr
+		}
 
 		out = token.Status.Token
-	}
-	Eventually(verifyTokenCreation).Should(Succeed())
+		if out == "" {
+			return fmt.Errorf("service account token is empty")
+		}
+		return nil
+	}).Should(Succeed())
 
 	return out, err
 }

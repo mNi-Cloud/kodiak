@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -74,9 +75,17 @@ type ConnectorSpecSpec struct {
 }
 
 type TailscaleConfig struct {
-	// +kubebuilder:validation:Required
-	// Auth key used for Tailscale authentication
-	AuthKey string `json:"authKey"`
+	// +optional
+	// Auth key used for Tailscale authentication (mutually exclusive with AuthKeyRef)
+	AuthKey string `json:"authKey,omitempty"`
+
+	// +optional
+	// AuthKeySecretRef references an existing secret containing TS_AUTH_KEY (mutually exclusive with AuthKey and AuthKeyRef)
+	AuthKeySecretRef *corev1.SecretKeySelector `json:"authKeySecretRef,omitempty"`
+
+	// +optional
+	// AuthKeyRef references an AuthKey resource to use for authentication
+	AuthKeyRef *corev1.LocalObjectReference `json:"authKeyRef,omitempty"`
 
 	// +kubebuilder:default="stable"
 	// +optional
@@ -102,8 +111,12 @@ type TailscaleConfig struct {
 	AcceptDNS bool `json:"acceptDns,omitempty"`
 
 	// +optional
-	// URL for custom Tailscale control server (e.g., Headscale)
+	// URL for custom Tailscale control server (mutually exclusive with ControlServerRef)
 	ControlServerUrl string `json:"controlServerUrl,omitempty"`
+
+	// +optional
+	// ControlServerRef references a ControlServer resource to use
+	ControlServerRef *corev1.LocalObjectReference `json:"controlServerRef,omitempty"`
 }
 
 // ConnectorStatus defines the observed state of Connector.

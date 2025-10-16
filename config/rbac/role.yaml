@@ -7,6 +7,21 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
+  - persistentvolumeclaims
+  - secrets
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - events
   verbs:
   - create
@@ -27,19 +42,6 @@ rules:
   verbs:
   - create
 - apiGroups:
-  - ""
-  resources:
-  - secrets
-  - services
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - apps
   resources:
   - deployments
@@ -54,7 +56,10 @@ rules:
 - apiGroups:
   - kodiak.mnicloud.jp
   resources:
+  - authkeys
   - connectors
+  - controlservers
+  - tailnets
   verbs:
   - create
   - delete
@@ -66,13 +71,19 @@ rules:
 - apiGroups:
   - kodiak.mnicloud.jp
   resources:
+  - authkeys/finalizers
   - connectors/finalizers
+  - controlservers/finalizers
+  - tailnets/finalizers
   verbs:
   - update
 - apiGroups:
   - kodiak.mnicloud.jp
   resources:
+  - authkeys/status
   - connectors/status
+  - controlservers/status
+  - tailnets/status
   verbs:
   - get
   - patch

@@ -25,10 +25,12 @@ import (
 	"strings"
 	"time"
 
+	pb "github.com/jsiebens/ionscale/pkg/gen/ionscale/v1"
 	"github.com/mNi-Cloud/kodiak/api/v1alpha1"
+	controlclient "github.com/mNi-Cloud/kodiak/internal/client"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -45,7 +47,9 @@ import (
 const (
 	tailscaleDefaultImage = "tailscale/tailscale"
 	deploymentNameSuffix  = "-ts-connector"
-	secretName            = "tailscale-auth"
+	caBundleVolumeName    = "tailscale-custom-ca"
+	caBundleMountPath     = "/etc/tailscale/custom-ca"
+	authKeySecretKey      = "TS_AUTH_KEY"
 
 	// Condition types
 	conditionTypeReady              = "Ready"
@@ -59,7 +63,24 @@ const (
 	reasonDeploymentError       = "DeploymentError"
 	reasonTailscaleConnected    = "TailscaleConnected"
 	reasonTailscaleDisconnected = "TailscaleDisconnected"
+	reasonAuthKeyNotFound       = "AuthKeyNotFound"
+	reasonAuthKeyNotReady       = "AuthKeyNotReady"
+	reasonAuthKeySecretError    = "AuthKeySecretUnavailable"
+	reasonAuthKeyNotConfigured  = "AuthKeyNotConfigured"
 )
+
+var (
+	authKeyRequeueDelay = 10 * time.Second
+)
+
+type resolvedAuthKey struct {
+	Env               corev1.EnvVar
+	TailnetID         uint64
+	TailnetName       string
+	ControlServerName string
+	AuthKeyName       string
+	HasTailnet        bool
+}
 
 // ConnectorReconciler reconciles a Connector object
 type ConnectorReconciler struct {
@@ -84,7 +105,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	var resource v1alpha1.Connector
 	if err := r.Get(ctx, req.NamespacedName, &resource); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		logger.Error(err, "Unable to get Connector")
@@ -99,6 +120,45 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Ensure finalizer
 	if result, err := r.ensureFinalizer(ctx, &resource); err != nil || result.Requeue {
 		return result, err
+	}
+
+	loginServer := resource.Spec.Spec.Tailscale.ControlServerUrl
+	if loginServer == "" && resource.Spec.Spec.Tailscale.ControlServerRef != nil && resource.Spec.Spec.Tailscale.ControlServerRef.Name != "" {
+		var controlServer v1alpha1.ControlServer
+		if err := r.Get(ctx, types.NamespacedName{Name: resource.Spec.Spec.Tailscale.ControlServerRef.Name, Namespace: resource.Namespace}, &controlServer); err != nil {
+			if apierrors.IsNotFound(err) {
+				logger.Info("ControlServer reference not found yet", "controlServer", resource.Spec.Spec.Tailscale.ControlServerRef.Name)
+				r.setCondition(&resource, conditionTypeReady, metav1.ConditionFalse, reasonProcessing, fmt.Sprintf("Waiting for control server %q", resource.Spec.Spec.Tailscale.ControlServerRef.Name))
+				if updateErr := r.Status().Update(ctx, &resource); updateErr != nil {
+					logger.Error(updateErr, "Unable to update connector status")
+				}
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+			return ctrl.Result{}, err
+		}
+
+		if !controlServer.Status.Ready || controlServer.Status.Endpoint == "" {
+			logger.Info("ControlServer not ready", "controlServer", controlServer.Name)
+			r.setCondition(&resource, conditionTypeReady, metav1.ConditionFalse, reasonProcessing, fmt.Sprintf("Control server %q is not ready", controlServer.Name))
+			if updateErr := r.Status().Update(ctx, &resource); updateErr != nil {
+				logger.Error(updateErr, "Unable to update connector status")
+			}
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		loginServer = controlServer.Status.Endpoint
+	}
+
+	resolvedAuth, authKeyResult, err := r.resolveAuthKey(ctx, &resource)
+	if err != nil {
+		logger.Error(err, "Failed to resolve auth key for connector")
+		return ctrl.Result{}, err
+	}
+	if authKeyResult.Requeue {
+		return authKeyResult, nil
+	}
+	if resolvedAuth == nil {
+		resolvedAuth = &resolvedAuthKey{}
 	}
 
 	// Check if Pod is running
@@ -127,7 +187,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Reconcile the Deployment for Tailscale connector
-	deployResult, err := r.reconcileDeployment(ctx, &resource)
+	deployResult, err := r.reconcileDeployment(ctx, &resource, loginServer, resolvedAuth.Env)
 	if err != nil {
 		logger.Error(err, "Unable to reconcile Deployment")
 		r.setCondition(&resource, conditionTypeDeploymentReady, metav1.ConditionFalse, reasonDeploymentError, err.Error())
@@ -154,7 +214,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	r.setCondition(&resource, conditionTypeDeploymentReady, metav1.ConditionTrue, reasonDeploymentCreated, "Deployment ready")
 
 	// Reconcile Tailscale status
-	if err := r.reconcileTailscaleStatus(ctx, &resource, podRunning); err != nil {
+	if err := r.reconcileTailscaleStatus(ctx, &resource, podRunning, resolvedAuth); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
 
@@ -215,9 +275,9 @@ func (r *ConnectorReconciler) handleDeletion(ctx context.Context, resource *v1al
 	}
 
 	// Cleanup resources
-	deploy := r.deploymentForConnector(resource)
+	deploy := r.deploymentForConnector(resource, "", corev1.EnvVar{Name: "TS_AUTH_KEY", Value: ""})
 	err := r.Delete(ctx, deploy)
-	if err != nil && !errors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) {
 		logger.Error(err, "Failed to delete deployment")
 		return ctrl.Result{}, err
 	}
@@ -225,7 +285,7 @@ func (r *ConnectorReconciler) handleDeletion(ctx context.Context, resource *v1al
 	// Retrieve the latest resource state before removing finalizer
 	var latestResource v1alpha1.Connector
 	if err := r.Get(ctx, types.NamespacedName{Name: resource.Name, Namespace: resource.Namespace}, &latestResource); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			logger.Info("Resource already deleted, skipping finalizer removal")
 			return ctrl.Result{}, nil
 		}
@@ -241,7 +301,7 @@ func (r *ConnectorReconciler) handleDeletion(ctx context.Context, resource *v1al
 				"resourceUID", latestResource.UID,
 				"resourceVersion", latestResource.ResourceVersion)
 
-			if errors.IsConflict(err) {
+			if apierrors.IsConflict(err) {
 				logger.Info("Conflict detected when removing finalizer, will retry")
 				return ctrl.Result{Requeue: true}, nil
 			}
@@ -253,10 +313,119 @@ func (r *ConnectorReconciler) handleDeletion(ctx context.Context, resource *v1al
 	return ctrl.Result{}, nil
 }
 
+func (r *ConnectorReconciler) resolveAuthKey(ctx context.Context, resource *v1alpha1.Connector) (*resolvedAuthKey, ctrl.Result, error) {
+	resolved := &resolvedAuthKey{}
+
+	if resource.Spec.Spec.Tailscale.AuthKey != "" {
+		resolved.Env = corev1.EnvVar{
+			Name:  "TS_AUTH_KEY",
+			Value: resource.Spec.Spec.Tailscale.AuthKey,
+		}
+		return resolved, ctrl.Result{}, nil
+	}
+
+	if resource.Spec.Spec.Tailscale.AuthKeySecretRef != nil && resource.Spec.Spec.Tailscale.AuthKeySecretRef.Name != "" {
+		selector := resource.Spec.Spec.Tailscale.AuthKeySecretRef.DeepCopy()
+		if selector.Key == "" {
+			selector.Key = authKeySecretKey
+		}
+		resolved.Env = corev1.EnvVar{
+			Name: "TS_AUTH_KEY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: selector,
+			},
+		}
+		return resolved, ctrl.Result{}, nil
+	}
+
+	if resource.Spec.Spec.Tailscale.AuthKeyRef != nil && resource.Spec.Spec.Tailscale.AuthKeyRef.Name != "" {
+		var authKey v1alpha1.AuthKey
+		if err := r.Get(ctx, types.NamespacedName{Name: resource.Spec.Spec.Tailscale.AuthKeyRef.Name, Namespace: resource.Namespace}, &authKey); err != nil {
+			if apierrors.IsNotFound(err) {
+				r.setCondition(resource, conditionTypeReady, metav1.ConditionFalse, reasonAuthKeyNotFound, fmt.Sprintf("AuthKey %q not found", resource.Spec.Spec.Tailscale.AuthKeyRef.Name))
+				if updateErr := r.Status().Update(ctx, resource); updateErr != nil {
+					log.FromContext(ctx).Error(updateErr, "Unable to update connector status after auth key not found")
+				}
+				return nil, ctrl.Result{RequeueAfter: authKeyRequeueDelay}, nil
+			}
+			return nil, ctrl.Result{}, err
+		}
+
+		if !authKey.Status.Ready {
+			r.setCondition(resource, conditionTypeReady, metav1.ConditionFalse, reasonAuthKeyNotReady, fmt.Sprintf("AuthKey %q is not ready", authKey.Name))
+			if updateErr := r.Status().Update(ctx, resource); updateErr != nil {
+				log.FromContext(ctx).Error(updateErr, "Unable to update connector status while waiting for auth key readiness")
+			}
+			return nil, ctrl.Result{RequeueAfter: authKeyRequeueDelay}, nil
+		}
+
+		if authKey.Status.SecretRef == nil || authKey.Status.SecretRef.Name == "" {
+			r.setCondition(resource, conditionTypeReady, metav1.ConditionFalse, reasonAuthKeySecretError, fmt.Sprintf("AuthKey %q does not provide a secret reference", authKey.Name))
+			if updateErr := r.Status().Update(ctx, resource); updateErr != nil {
+				log.FromContext(ctx).Error(updateErr, "Unable to update connector status after missing auth key secret reference")
+			}
+			return nil, ctrl.Result{RequeueAfter: authKeyRequeueDelay}, nil
+		}
+
+		resolved.Env = corev1.EnvVar{
+			Name: "TS_AUTH_KEY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: authKey.Status.SecretRef.Name},
+					Key:                  authKeySecretKey,
+				},
+			},
+		}
+		resolved.AuthKeyName = authKey.Name
+
+		tailnetName := ""
+		if authKey.Spec.TailnetRef.Name != "" {
+			tailnetName = authKey.Spec.TailnetRef.Name
+		}
+
+		if tailnetName != "" {
+			var tailnet v1alpha1.Tailnet
+			if err := r.Get(ctx, types.NamespacedName{Name: tailnetName, Namespace: resource.Namespace}, &tailnet); err != nil {
+				if apierrors.IsNotFound(err) {
+					r.setCondition(resource, conditionTypeReady, metav1.ConditionFalse, reasonTailnetNotReady, fmt.Sprintf("Tailnet %q not found", tailnetName))
+					if updateErr := r.Status().Update(ctx, resource); updateErr != nil {
+						log.FromContext(ctx).Error(updateErr, "Unable to update connector status after tailnet missing")
+					}
+					return nil, ctrl.Result{RequeueAfter: authKeyRequeueDelay}, nil
+				}
+				return nil, ctrl.Result{}, err
+			}
+
+			if !tailnet.Status.Ready || tailnet.Status.TailnetID == 0 {
+				r.setCondition(resource, conditionTypeReady, metav1.ConditionFalse, reasonTailnetNotReady, fmt.Sprintf("Tailnet %q is not ready", tailnet.Name))
+				if updateErr := r.Status().Update(ctx, resource); updateErr != nil {
+					log.FromContext(ctx).Error(updateErr, "Unable to update connector status while waiting for tailnet readiness")
+				}
+				return nil, ctrl.Result{RequeueAfter: authKeyRequeueDelay}, nil
+			}
+
+			resolved.TailnetID = tailnet.Status.TailnetID
+			resolved.TailnetName = tailnet.Name
+			if tailnet.Spec.ControlServerRef.Name != "" {
+				resolved.ControlServerName = tailnet.Spec.ControlServerRef.Name
+			}
+			resolved.HasTailnet = true
+		}
+
+		return resolved, ctrl.Result{}, nil
+	}
+
+	r.setCondition(resource, conditionTypeReady, metav1.ConditionFalse, reasonAuthKeyNotConfigured, "Provide spec.spec.tailscale.authKey, authKeySecretRef, or authKeyRef")
+	if updateErr := r.Status().Update(ctx, resource); updateErr != nil {
+		log.FromContext(ctx).Error(updateErr, "Unable to update connector status after missing auth key configuration")
+	}
+	return nil, ctrl.Result{RequeueAfter: authKeyRequeueDelay}, nil
+}
+
 // reconcileDeployment creates or updates the Deployment for the Tailscale connector
-func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alpha1.Connector) (ctrl.Result, error) {
+func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alpha1.Connector, loginServer string, authKeyEnv corev1.EnvVar) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-	deploy := r.deploymentForConnector(cr)
+	deploy := r.deploymentForConnector(cr, loginServer, authKeyEnv)
 
 	// Set controller reference
 	if err := controllerutil.SetControllerReference(cr, deploy, r.Scheme); err != nil {
@@ -266,7 +435,7 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 	// Check if the Deployment already exists
 	found := &appsv1.Deployment{}
 	err := r.Get(ctx, types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace}, found)
-	if err != nil && errors.IsNotFound(err) {
+	if err != nil && apierrors.IsNotFound(err) {
 		logger.Info("Creating Deployment", "Name", deploy.Name)
 		if err = r.Create(ctx, deploy); err != nil {
 			return ctrl.Result{}, err
@@ -323,7 +492,7 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 
 		if err = r.Update(ctx, updatedDeploy); err != nil {
 			// If conflict occurred, log but don't return error
-			if errors.IsConflict(err) {
+			if apierrors.IsConflict(err) {
 				logger.Info("Deployment update conflict, will retry on next reconcile")
 				return ctrl.Result{Requeue: true}, nil
 			}
@@ -346,7 +515,7 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 }
 
 // deploymentForConnector returns a Deployment for the Tailscale connector
-func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector) *appsv1.Deployment {
+func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector, loginServer string, authKeyEnv corev1.EnvVar) *appsv1.Deployment {
 	version := cr.Spec.Spec.Tailscale.Version
 	if version == "" {
 		version = "stable"
@@ -367,27 +536,7 @@ func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector) *ap
 	}
 
 	// Create environment variables for the container
-	env := []corev1.EnvVar{}
-
-	// Use authKey if specified directly, otherwise reference the secret
-	if cr.Spec.Spec.Tailscale.AuthKey != "" {
-		env = append(env, corev1.EnvVar{
-			Name:  "TS_AUTH_KEY",
-			Value: cr.Spec.Spec.Tailscale.AuthKey,
-		})
-	} else {
-		env = append(env, corev1.EnvVar{
-			Name: "TS_AUTH_KEY",
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: secretName,
-					},
-					Key: "TS_AUTH_KEY",
-				},
-			},
-		})
-	}
+	env := []corev1.EnvVar{authKeyEnv}
 
 	// Add POD_NAME and POD_UID for debugging Events
 	env = append(env, corev1.EnvVar{
@@ -425,10 +574,15 @@ func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector) *ap
 	})
 
 	// Add control server URL if specified
-	if cr.Spec.Spec.Tailscale.ControlServerUrl != "" {
+	effectiveLoginServer := cr.Spec.Spec.Tailscale.ControlServerUrl
+	if effectiveLoginServer == "" {
+		effectiveLoginServer = loginServer
+	}
+
+	if effectiveLoginServer != "" {
 		env = append(env, corev1.EnvVar{
 			Name:  "TS_EXTRA_ARGS",
-			Value: "--login-server=" + cr.Spec.Spec.Tailscale.ControlServerUrl,
+			Value: "--login-server=" + effectiveLoginServer,
 		})
 	}
 
@@ -814,7 +968,7 @@ func (r *ConnectorReconciler) ensureFinalizer(ctx context.Context, resource *v1a
 }
 
 // reconcileTailscaleStatus checks Tailscale status and updates conditions
-func (r *ConnectorReconciler) reconcileTailscaleStatus(ctx context.Context, resource *v1alpha1.Connector, podRunning bool) error {
+func (r *ConnectorReconciler) reconcileTailscaleStatus(ctx context.Context, resource *v1alpha1.Connector, podRunning bool, resolvedAuth *resolvedAuthKey) error {
 	logger := log.FromContext(ctx)
 
 	// If pod is running, get Tailscale status
@@ -842,6 +996,8 @@ func (r *ConnectorReconciler) reconcileTailscaleStatus(ctx context.Context, reso
 				"NodeID", status.NodeID,
 				"TailscaleIP", status.IP,
 				"AdvertisedRoutes", status.AdvertisedRoutes)
+
+			r.enableRoutesIfNeeded(ctx, resource, resolvedAuth)
 		} else {
 			logger.Info("Tailscale is not connected")
 			r.setCondition(resource, conditionTypeTailscaleConnected, metav1.ConditionFalse,
@@ -865,4 +1021,178 @@ func (r *ConnectorReconciler) reconcileTailscaleStatus(ctx context.Context, reso
 	}
 
 	return nil
+}
+
+func (r *ConnectorReconciler) enableRoutesIfNeeded(ctx context.Context, resource *v1alpha1.Connector, resolvedAuth *resolvedAuthKey) {
+	logger := log.FromContext(ctx)
+
+	if resolvedAuth == nil || !resolvedAuth.HasTailnet {
+		return
+	}
+
+	desiredRoutes := uniqueRoutes(resource.Spec.Spec.Tailscale.AdvertiseRoutes)
+	if len(desiredRoutes) == 0 {
+		return
+	}
+
+	if resource.Status.NodeID == "" && resource.Status.TailscaleIP == "" {
+		logger.V(1).Info("Skipping route enablement; connector does not yet have node identity")
+		return
+	}
+
+	controlServerName := ""
+	if resource.Spec.Spec.Tailscale.ControlServerRef != nil {
+		controlServerName = resource.Spec.Spec.Tailscale.ControlServerRef.Name
+	}
+	if controlServerName == "" && resolvedAuth.ControlServerName != "" {
+		controlServerName = resolvedAuth.ControlServerName
+	}
+	if controlServerName == "" {
+		logger.V(1).Info("Skipping route enablement; no control server reference available")
+		return
+	}
+
+	var controlServer v1alpha1.ControlServer
+	if err := r.Get(ctx, types.NamespacedName{Name: controlServerName, Namespace: resource.Namespace}, &controlServer); err != nil {
+		if !apierrors.IsNotFound(err) {
+			logger.Error(err, "Failed to fetch control server for route enablement", "controlServer", controlServerName)
+		}
+		return
+	}
+
+	if !controlServer.Status.Ready {
+		logger.V(1).Info("Control server not ready; skipping route enablement", "controlServer", controlServerName)
+		return
+	}
+
+	adminKey, _, err := readAdminKey(ctx, r.Client, &controlServer)
+	if err != nil {
+		logger.Error(err, "Failed to read system admin key", "controlServer", controlServerName)
+		return
+	}
+	if adminKey == "" {
+		logger.V(1).Info("System admin key empty; skipping route enablement", "controlServer", controlServerName)
+		return
+	}
+
+	endpoint, skipVerify := deriveControlServerEndpoint(&controlServer)
+	ctrlClient, err := controlclient.NewControlServerClient(endpoint, adminKey, skipVerify)
+	if err != nil {
+		logger.Error(err, "Failed to create control server client", "endpoint", endpoint)
+		return
+	}
+
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	machines, err := ctrlClient.ListMachines(ctxWithTimeout, resolvedAuth.TailnetID)
+	if err != nil {
+		logger.Error(err, "Failed to list machines for tailnet", "tailnetID", resolvedAuth.TailnetID)
+		return
+	}
+
+	machine := findConnectorMachine(machines, resource)
+	if machine == nil {
+		logger.Info("Unable to locate connector machine for route enablement",
+			"tailnetID", resolvedAuth.TailnetID,
+			"nodeID", resource.Status.NodeID,
+			"tailscaleIP", resource.Status.TailscaleIP)
+		return
+	}
+
+	if routesAlreadyEnabled(machine.GetEnabledRoutes(), desiredRoutes) {
+		return
+	}
+
+	if _, err := ctrlClient.EnableMachineRoutes(ctxWithTimeout, machine.GetId(), desiredRoutes, false); err != nil {
+		logger.Error(err, "Failed to enable machine routes",
+			"machineID", machine.GetId(),
+			"routes", desiredRoutes)
+		return
+	}
+
+	logger.Info("Enabled advertised routes for connector",
+		"machineID", machine.GetId(),
+		"routes", strings.Join(desiredRoutes, ","),
+		"tailnetID", resolvedAuth.TailnetID)
+}
+
+func findConnectorMachine(machines []*pb.Machine, resource *v1alpha1.Connector) *pb.Machine {
+	if len(machines) == 0 {
+		return nil
+	}
+
+	desiredNames := []string{}
+	if resource.Status.NodeID != "" {
+		desiredNames = append(desiredNames, strings.ToLower(resource.Status.NodeID))
+	}
+	if resource.Spec.Spec.Tailscale.Hostname != "" {
+		desiredNames = append(desiredNames, strings.ToLower(resource.Spec.Spec.Tailscale.Hostname))
+	}
+	desiredNames = append(desiredNames, strings.ToLower(resource.Name), strings.ToLower(resource.Name+"-connector"))
+
+	desiredIP := strings.TrimSpace(resource.Status.TailscaleIP)
+
+	for _, machine := range machines {
+		if machine == nil {
+			continue
+		}
+		if desiredIP != "" && (machine.GetIpv4() == desiredIP || machine.GetIpv6() == desiredIP) {
+			return machine
+		}
+		name := strings.ToLower(machine.GetName())
+		for _, ident := range desiredNames {
+			if ident == "" {
+				continue
+			}
+			if name == ident || strings.HasPrefix(name, ident+".") || strings.HasPrefix(name, ident+"-") {
+				return machine
+			}
+		}
+	}
+
+	return nil
+}
+
+func routesAlreadyEnabled(enabled, desired []string) bool {
+	if len(desired) == 0 {
+		return true
+	}
+
+	enabledSet := make(map[string]struct{}, len(enabled))
+	for _, route := range enabled {
+		if route == "" {
+			continue
+		}
+		enabledSet[route] = struct{}{}
+	}
+
+	for _, route := range desired {
+		if _, ok := enabledSet[route]; !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
+func uniqueRoutes(routes []string) []string {
+	if len(routes) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(routes))
+	result := make([]string, 0, len(routes))
+	for _, r := range routes {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			continue
+		}
+		if _, exists := seen[r]; exists {
+			continue
+		}
+		seen[r] = struct{}{}
+		result = append(result, r)
+	}
+	return result
 }

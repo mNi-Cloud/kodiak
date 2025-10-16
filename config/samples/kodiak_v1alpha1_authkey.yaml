@@ -1,0 +1,22 @@
+apiVersion: kodiak.mnicloud.jp/v1alpha1
+kind: AuthKey
+metadata:
+  labels:
+    app.kubernetes.io/name: kodiak
+    app.kubernetes.io/managed-by: kustomize
+  name: authkey-sample
+spec:
+  # Tailnet to create the auth key in
+  tailnetRef:
+    name: tailnet-sample
+
+  # Optional key behaviour
+  ephemeral: false
+  expiry: "24h"
+  tags:
+    - "tag:k8s"
+    - "tag:connector"
+  preAuthorized: true
+
+  # Optional secret override (defaults to authkey-<name>)
+  secretName: authkey-sample-secret

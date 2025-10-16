@@ -123,11 +123,68 @@ spec:
                           type: string
                         type: array
                       authKey:
-                        description: Auth key used for Tailscale authentication
+                        description: Auth key used for Tailscale authentication (mutually
+                          exclusive with AuthKeyRef)
                         type: string
+                      authKeyRef:
+                        description: AuthKeyRef references an AuthKey resource to
+                          use for authentication
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      authKeySecretRef:
+                        description: AuthKeySecretRef references an existing secret
+                          containing TS_AUTH_KEY (mutually exclusive with AuthKey
+                          and AuthKeyRef)
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      controlServerRef:
+                        description: ControlServerRef references a ControlServer resource
+                          to use
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
                       controlServerUrl:
-                        description: URL for custom Tailscale control server (e.g.,
-                          Headscale)
+                        description: URL for custom Tailscale control server (mutually
+                          exclusive with ControlServerRef)
                         type: string
                       hostname:
                         description: Hostname to use for the tailscale node
@@ -140,8 +197,6 @@ spec:
                         default: stable
                         description: Tailscale image tag/version to use
                         type: string
-                    required:
-                    - authKey
                     type: object
                 type: object
             type: object
