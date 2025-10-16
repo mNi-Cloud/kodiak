@@ -216,6 +216,22 @@ func (c *ControlServerClient) ListMachines(ctx context.Context, tailnetID uint64
 	return resp.Msg.Machines, nil
 }
 
+// EnableMachineRoutes ensures the provided routes are enabled for the machine
+func (c *ControlServerClient) EnableMachineRoutes(ctx context.Context, machineID uint64, routes []string, replace bool) (*pb.MachineRoutes, error) {
+	req := connect.NewRequest(&pb.EnableMachineRoutesRequest{
+		MachineId: machineID,
+		Routes:    routes,
+		Replace:   replace,
+	})
+
+	resp, err := c.client.EnableMachineRoutes(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Msg.Routes, nil
+}
+
 // DeleteMachine deletes a machine
 func (c *ControlServerClient) DeleteMachine(ctx context.Context, machineID uint64) error {
 	req := connect.NewRequest(&pb.DeleteMachineRequest{

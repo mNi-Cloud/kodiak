@@ -43,8 +43,8 @@ spec:
       
       # Required: Networks to advertise (CIDR format)
       advertiseRoutes: 
-        - "10.0.0.0/24"
-        - "192.168.1.0/24"
+        - "10.244.0.0/24"   # Pod CIDR
+        - "10.96.0.0/12"    # Service CIDR
       
       # Optional: Enable USERSPACE networking mode (defaults to true)
       # This is the default mode and is specified in the requirements
