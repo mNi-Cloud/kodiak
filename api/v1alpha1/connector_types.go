@@ -60,8 +60,12 @@ type ConnectorSpec struct {
 // ResourceMetadata contains metadata for the resource
 type ResourceMetadata struct {
 	// +optional
-	// Labels to apply to deployments
+	// Labels to apply to deployments and pods
 	Labels map[string]string `json:"labels,omitempty"`
+
+	// +optional
+	// Annotations to apply to pods
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 type ConnectorSpecSpec struct {

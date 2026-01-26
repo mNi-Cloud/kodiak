@@ -944,14 +944,14 @@ func computeControlServerAddresses(resource *kodiakv1alpha1.ControlServer) (stri
 }
 
 func sanitizePublicAddr(candidate string, tlsConfig *kodiakv1alpha1.TLSConfig, namespace, svcName string, listenPort int32) string {
-	if candidate == "" {
-		host := fmt.Sprintf("%s.%s.svc.cluster.local", svcName, namespace)
-		return fmt.Sprintf("%s:%d", host, listenPort)
-	}
-
 	scheme := schemeHTTPS
 	if tlsConfig != nil && tlsConfig.Disable {
 		scheme = schemeHTTP
+	}
+
+	if candidate == "" {
+		host := fmt.Sprintf("%s.%s.svc.cluster.local", svcName, namespace)
+		return fmt.Sprintf("%s://%s:%d", scheme, host, listenPort)
 	}
 
 	addr := trimScheme(candidate)
@@ -964,7 +964,7 @@ func sanitizePublicAddr(candidate string, tlsConfig *kodiakv1alpha1.TLSConfig, n
 		addr = fmt.Sprintf("%s:%d", addr, defaultPort)
 	}
 
-	return addr
+	return fmt.Sprintf("%s://%s", scheme, addr)
 }
 
 func trimScheme(value string) string {

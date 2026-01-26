@@ -164,7 +164,7 @@ type TLSConfig struct {
 	// AcmePath for storing ACME generated artifacts
 	AcmePath string `json:"acmePath,omitempty"`
 
-	// +kubebuilder:default=true
+	// +kubebuilder:default=false
 	// +optional
 	// ForceHTTPS redirects HTTP requests to HTTPS when TLS is enabled
 	ForceHTTPS bool `json:"forceHttps,omitempty"`

@@ -294,7 +294,7 @@ spec:
                         description: Disable TLS
                         type: boolean
                       forceHttps:
-                        default: true
+                        default: false
                         description: ForceHTTPS redirects HTTP requests to HTTPS when
                           TLS is enabled
                         type: boolean

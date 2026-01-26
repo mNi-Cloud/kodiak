@@ -155,7 +155,7 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		logger.Error(err, "Failed to resolve auth key for connector")
 		return ctrl.Result{}, err
 	}
-	if authKeyResult.Requeue {
+	if authKeyResult.Requeue || authKeyResult.RequeueAfter != 0 {
 		return authKeyResult, nil
 	}
 	if resolvedAuth == nil {
@@ -647,6 +647,15 @@ func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector, log
 		}
 	}
 
+	// Get annotations for pods
+	var annotations map[string]string
+	if cr.Spec.Metadata != nil && cr.Spec.Metadata.Annotations != nil {
+		annotations = make(map[string]string)
+		for k, v := range cr.Spec.Metadata.Annotations {
+			annotations[k] = v
+		}
+	}
+
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cr.Name + deploymentNameSuffix,
@@ -659,7 +668,8 @@ func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector, log
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
+					Labels:      labels,
+					Annotations: annotations,
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "tailscale-connector",

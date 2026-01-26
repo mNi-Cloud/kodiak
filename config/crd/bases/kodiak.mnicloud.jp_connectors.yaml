@@ -81,10 +81,15 @@ spec:
               metadata:
                 description: Metadata for the resource
                 properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: Annotations to apply to pods
+                    type: object
                   labels:
                     additionalProperties:
                       type: string
-                    description: Labels to apply to deployments
+                    description: Labels to apply to deployments and pods
                     type: object
                 type: object
               spec:
