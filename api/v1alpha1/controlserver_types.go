@@ -250,8 +250,10 @@ type OIDCConfig struct {
 	// ClientID for OIDC authentication
 	ClientID string `json:"clientId"`
 
+	// +optional
 	// ClientSecretRef references a secret containing the client secret
-	ClientSecretRef corev1.SecretKeySelector `json:"clientSecretRef"`
+	// Some OIDC providers support public clients without a client secret
+	ClientSecretRef *corev1.SecretKeySelector `json:"clientSecretRef,omitempty"`
 
 	// +optional
 	// AdditionalScopes for OIDC authentication

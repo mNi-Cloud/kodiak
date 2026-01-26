@@ -73,8 +73,9 @@ spec:
                             description: ClientID for OIDC authentication
                             type: string
                           clientSecretRef:
-                            description: ClientSecretRef references a secret containing
-                              the client secret
+                            description: |-
+                              ClientSecretRef references a secret containing the client secret
+                              Some OIDC providers support public clients without a client secret
                             properties:
                               key:
                                 description: The key of the secret to select from.  Must
@@ -102,7 +103,6 @@ spec:
                             type: string
                         required:
                         - clientId
-                        - clientSecretRef
                         - issuer
                         type: object
                       systemAdmins:

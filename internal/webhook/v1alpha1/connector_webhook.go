@@ -87,7 +87,8 @@ func (v *ConnectorCustomValidator) ValidateCreate(_ context.Context, obj runtime
 	}
 	connectorlog.Info("Validation for Connector upon creation", "name", connector.GetName())
 
-	return nil, validateConnector(connector)
+	warnings := collectConnectorWarnings(connector)
+	return warnings, validateConnector(connector)
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type Connector.
@@ -98,7 +99,8 @@ func (v *ConnectorCustomValidator) ValidateUpdate(_ context.Context, oldObj, new
 	}
 	connectorlog.Info("Validation for Connector upon update", "name", connector.GetName())
 
-	return nil, validateConnector(connector)
+	warnings := collectConnectorWarnings(connector)
+	return warnings, validateConnector(connector)
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type Connector.
@@ -117,16 +119,34 @@ func validateConnector(c *kodiakv1alpha1.Connector) error {
 
 	ts := c.Spec.Spec.Tailscale
 
-	// Validate that at least one auth key configuration is provided
+	// Validate auth key configuration
 	hasInlineKey := ts.AuthKey != ""
 	hasSecretRef := ts.AuthKeySecretRef != nil && ts.AuthKeySecretRef.Name != ""
 	hasAuthKeyRef := ts.AuthKeyRef != nil && ts.AuthKeyRef.Name != ""
 
-	if !hasInlineKey && !hasSecretRef && !hasAuthKeyRef {
+	authKeyCount := 0
+	if hasInlineKey {
+		authKeyCount++
+	}
+	if hasSecretRef {
+		authKeyCount++
+	}
+	if hasAuthKeyRef {
+		authKeyCount++
+	}
+
+	if authKeyCount == 0 {
+		allErrs = append(allErrs, field.Required(
+			field.NewPath("spec", "spec", "tailscale"),
+			"one of authKey, authKeySecretRef, or authKeyRef must be specified",
+		))
+	}
+
+	if authKeyCount > 1 {
 		allErrs = append(allErrs, field.Invalid(
 			field.NewPath("spec", "spec", "tailscale"),
 			ts,
-			"at least one of authKey, authKeySecretRef, or authKeyRef must be specified",
+			"only one of authKey, authKeySecretRef, or authKeyRef can be specified",
 		))
 	}
 
@@ -159,4 +179,17 @@ func validateConnector(c *kodiakv1alpha1.Connector) error {
 		return nil
 	}
 	return allErrs.ToAggregate()
+}
+
+func collectConnectorWarnings(c *kodiakv1alpha1.Connector) admission.Warnings {
+	var warnings admission.Warnings
+
+	ts := c.Spec.Spec.Tailscale
+
+	// Warn about inline auth key (security concern)
+	if ts.AuthKey != "" {
+		warnings = append(warnings, "using inline authKey is not recommended for production; consider using authKeySecretRef or authKeyRef instead")
+	}
+
+	return warnings
 }

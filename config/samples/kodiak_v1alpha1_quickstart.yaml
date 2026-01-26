@@ -1,0 +1,93 @@
+# Kodiak Quick Start Example
+# This example sets up a complete Kodiak deployment with:
+# - ControlServer (SQLite, TLS disabled for local development)
+# - Tailnet
+# - AuthKey
+# - Connector for subnet routing
+#
+# WARNING: This configuration is for development/testing only.
+# For production, use TLS and PostgreSQL.
+#
+# Apply with: kubectl apply -f kodiak_v1alpha1_quickstart.yaml
+---
+apiVersion: kodiak.mnicloud.jp/v1alpha1
+kind: ControlServer
+metadata:
+  name: quickstart-controlserver
+  labels:
+    app.kubernetes.io/name: kodiak-quickstart
+spec:
+  image: ghcr.io/jsiebens/ionscale:latest
+  config:
+    publicAddr: "quickstart-controlserver.default.svc.cluster.local:8080"
+    # SQLite database (default, suitable for single-replica deployments)
+    database:
+      type: sqlite
+    # TLS disabled for local development (NOT for production!)
+    tls:
+      disable: true
+    # Minimal DERP configuration
+    derp:
+      server:
+        disabled: false
+        regionId: 1000
+        regionCode: "local"
+        regionName: "Local DERP"
+---
+apiVersion: kodiak.mnicloud.jp/v1alpha1
+kind: Tailnet
+metadata:
+  name: quickstart-tailnet
+  labels:
+    app.kubernetes.io/name: kodiak-quickstart
+spec:
+  controlServerRef:
+    name: quickstart-controlserver
+  name: "quickstart"
+  # Allow all traffic by default
+  aclPolicy: |
+    {
+      "acls": [
+        {
+          "action": "accept",
+          "src": ["*"],
+          "dst": ["*:*"]
+        }
+      ]
+    }
+---
+apiVersion: kodiak.mnicloud.jp/v1alpha1
+kind: AuthKey
+metadata:
+  name: quickstart-authkey
+  labels:
+    app.kubernetes.io/name: kodiak-quickstart
+spec:
+  tailnetRef:
+    name: quickstart-tailnet
+  ephemeral: true
+  preAuthorized: true
+  expiry: "168h"  # 7 days
+  tags:
+    - "tag:k8s"
+---
+apiVersion: kodiak.mnicloud.jp/v1alpha1
+kind: Connector
+metadata:
+  name: quickstart-connector
+  labels:
+    app.kubernetes.io/name: kodiak-quickstart
+spec:
+  spec:
+    tailscale:
+      authKeyRef:
+        name: quickstart-authkey
+      controlServerRef:
+        name: quickstart-controlserver
+      # Advertise the default Kubernetes networks
+      # Adjust these CIDRs to match your cluster's configuration
+      advertiseRoutes:
+        - "10.244.0.0/16"   # Pod CIDR (common default)
+        - "10.96.0.0/12"    # Service CIDR (common default)
+      hostname: "k8s-quickstart"
+      userspaceNetworking: true

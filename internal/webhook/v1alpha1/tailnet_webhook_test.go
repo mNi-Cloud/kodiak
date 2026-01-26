@@ -17,71 +17,203 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
-	// TODO (user): Add any additional imports if needed
 )
 
 var _ = Describe("Tailnet Webhook", func() {
 	var (
-		obj       *kodiakv1alpha1.Tailnet
-		oldObj    *kodiakv1alpha1.Tailnet
+		ctx       context.Context
 		validator TailnetCustomValidator
 		defaulter TailnetCustomDefaulter
 	)
 
 	BeforeEach(func() {
-		obj = &kodiakv1alpha1.Tailnet{}
-		oldObj = &kodiakv1alpha1.Tailnet{}
+		ctx = context.Background()
 		validator = TailnetCustomValidator{}
-		Expect(validator).NotTo(BeNil(), "Expected validator to be initialized")
 		defaulter = TailnetCustomDefaulter{}
-		Expect(defaulter).NotTo(BeNil(), "Expected defaulter to be initialized")
-		Expect(oldObj).NotTo(BeNil(), "Expected oldObj to be initialized")
-		Expect(obj).NotTo(BeNil(), "Expected obj to be initialized")
-		// TODO (user): Add any setup logic common to all tests
-	})
-
-	AfterEach(func() {
-		// TODO (user): Add any teardown logic common to all tests
 	})
 
 	Context("When creating Tailnet under Defaulting Webhook", func() {
-		// TODO (user): Add logic for defaulting webhooks
-		// Example:
-		// It("Should apply defaults when a required field is empty", func() {
-		//     By("simulating a scenario where defaults should be applied")
-		//     obj.SomeFieldWithDefault = ""
-		//     By("calling the Default method to apply defaults")
-		//     defaulter.Default(ctx, obj)
-		//     By("checking that the default values are set")
-		//     Expect(obj.SomeFieldWithDefault).To(Equal("default_value"))
-		// })
+		It("Should not modify the object as no defaults are needed", func() {
+			obj := &kodiakv1alpha1.Tailnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-tailnet",
+					Namespace: "default",
+				},
+				Spec: kodiakv1alpha1.TailnetSpec{
+					Name: "my-tailnet",
+					ControlServerRef: corev1.LocalObjectReference{
+						Name: "my-controlserver",
+					},
+				},
+			}
+
+			err := defaulter.Default(ctx, obj)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify no modifications were made
+			Expect(obj.Spec.Name).To(Equal("my-tailnet"))
+			Expect(obj.Spec.ControlServerRef.Name).To(Equal("my-controlserver"))
+		})
 	})
 
-	Context("When creating or updating Tailnet under Validating Webhook", func() {
-		// TODO (user): Add logic for validating webhooks
-		// Example:
-		// It("Should deny creation if a required field is missing", func() {
-		//     By("simulating an invalid creation scenario")
-		//     obj.SomeRequiredField = ""
-		//     Expect(validator.ValidateCreate(ctx, obj)).Error().To(HaveOccurred())
-		// })
-		//
-		// It("Should admit creation if all required fields are present", func() {
-		//     By("simulating an invalid creation scenario")
-		//     obj.SomeRequiredField = "valid_value"
-		//     Expect(validator.ValidateCreate(ctx, obj)).To(BeNil())
-		// })
-		//
-		// It("Should validate updates correctly", func() {
-		//     By("simulating a valid update scenario")
-		//     oldObj.SomeRequiredField = "updated_value"
-		//     obj.SomeRequiredField = "updated_value"
-		//     Expect(validator.ValidateUpdate(ctx, oldObj, obj)).To(BeNil())
-		// })
-	})
+	Context("When validating Tailnet", func() {
+		It("Should deny creation if controlServerRef.name is missing", func() {
+			obj := &kodiakv1alpha1.Tailnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-tailnet",
+					Namespace: "default",
+				},
+				Spec: kodiakv1alpha1.TailnetSpec{
+					Name: "my-tailnet",
+					// ControlServerRef.Name is missing
+				},
+			}
 
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("controlServerRef"))
+		})
+
+		It("Should deny creation if name is missing", func() {
+			obj := &kodiakv1alpha1.Tailnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-tailnet",
+					Namespace: "default",
+				},
+				Spec: kodiakv1alpha1.TailnetSpec{
+					ControlServerRef: corev1.LocalObjectReference{
+						Name: "my-controlserver",
+					},
+					// Name is missing
+				},
+			}
+
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("name"))
+		})
+
+		It("Should deny creation if both name and controlServerRef.name are missing", func() {
+			obj := &kodiakv1alpha1.Tailnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-tailnet",
+					Namespace: "default",
+				},
+				Spec: kodiakv1alpha1.TailnetSpec{},
+			}
+
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("controlServerRef"))
+			Expect(err.Error()).To(ContainSubstring("name"))
+		})
+
+		It("Should admit creation with valid configuration", func() {
+			obj := &kodiakv1alpha1.Tailnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-tailnet",
+					Namespace: "default",
+				},
+				Spec: kodiakv1alpha1.TailnetSpec{
+					Name: "my-tailnet",
+					ControlServerRef: corev1.LocalObjectReference{
+						Name: "my-controlserver",
+					},
+				},
+			}
+
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("Should admit creation with IAMPolicy and ACLPolicy", func() {
+			obj := &kodiakv1alpha1.Tailnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-tailnet",
+					Namespace: "default",
+				},
+				Spec: kodiakv1alpha1.TailnetSpec{
+					Name: "my-tailnet",
+					ControlServerRef: corev1.LocalObjectReference{
+						Name: "my-controlserver",
+					},
+					IAMPolicy: `{"groups": {}}`,
+					ACLPolicy: `{"acls": []}`,
+				},
+			}
+
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("Should validate updates correctly", func() {
+			oldObj := &kodiakv1alpha1.Tailnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-tailnet",
+					Namespace: "default",
+				},
+				Spec: kodiakv1alpha1.TailnetSpec{
+					Name: "my-tailnet",
+					ControlServerRef: corev1.LocalObjectReference{
+						Name: "my-controlserver",
+					},
+				},
+			}
+
+			newObj := &kodiakv1alpha1.Tailnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-tailnet",
+					Namespace: "default",
+				},
+				Spec: kodiakv1alpha1.TailnetSpec{
+					Name: "my-tailnet-updated",
+					ControlServerRef: corev1.LocalObjectReference{
+						Name: "my-controlserver",
+					},
+				},
+			}
+
+			_, err := validator.ValidateUpdate(ctx, oldObj, newObj)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("Should deny update if name becomes empty", func() {
+			oldObj := &kodiakv1alpha1.Tailnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-tailnet",
+					Namespace: "default",
+				},
+				Spec: kodiakv1alpha1.TailnetSpec{
+					Name: "my-tailnet",
+					ControlServerRef: corev1.LocalObjectReference{
+						Name: "my-controlserver",
+					},
+				},
+			}
+
+			newObj := &kodiakv1alpha1.Tailnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-tailnet",
+					Namespace: "default",
+				},
+				Spec: kodiakv1alpha1.TailnetSpec{
+					Name: "", // Empty name
+					ControlServerRef: corev1.LocalObjectReference{
+						Name: "my-controlserver",
+					},
+				},
+			}
+
+			_, err := validator.ValidateUpdate(ctx, oldObj, newObj)
+			Expect(err).To(HaveOccurred())
+		})
+	})
 })

@@ -88,9 +88,9 @@ func (r *ControlServerReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	var oidcSecret *corev1.Secret
 	if resource.Spec.Config.Auth != nil && resource.Spec.Config.Auth.OIDC != nil {
-		secret := &corev1.Secret{}
 		secretRef := resource.Spec.Config.Auth.OIDC.ClientSecretRef
-		if secretRef.Name != "" {
+		if secretRef != nil && secretRef.Name != "" {
+			secret := &corev1.Secret{}
 			if err := r.Get(ctx, types.NamespacedName{Name: secretRef.Name, Namespace: resource.Namespace}, secret); err != nil {
 				if !errors.IsNotFound(err) {
 					logger.Error(err, "failed to fetch OIDC client secret", "secret", secretRef.Name)
@@ -437,11 +437,11 @@ func (r *ControlServerReconciler) reconcileDeployment(ctx context.Context, resou
 			})
 		}
 
-		if resource.Spec.Config.Auth != nil && resource.Spec.Config.Auth.OIDC != nil && resource.Spec.Config.Auth.OIDC.ClientSecretRef.Name != "" {
+		if resource.Spec.Config.Auth != nil && resource.Spec.Config.Auth.OIDC != nil && resource.Spec.Config.Auth.OIDC.ClientSecretRef != nil && resource.Spec.Config.Auth.OIDC.ClientSecretRef.Name != "" {
 			envVars = append(envVars, corev1.EnvVar{
 				Name: oidcClientSecretEnv,
 				ValueFrom: &corev1.EnvVarSource{
-					SecretKeyRef: &resource.Spec.Config.Auth.OIDC.ClientSecretRef,
+					SecretKeyRef: resource.Spec.Config.Auth.OIDC.ClientSecretRef,
 				},
 			})
 		}

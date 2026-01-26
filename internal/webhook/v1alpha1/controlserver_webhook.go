@@ -95,7 +95,8 @@ func (v *ControlServerCustomValidator) ValidateCreate(_ context.Context, obj run
 	}
 	controlserverlog.Info("Validation for ControlServer upon creation", "name", controlserver.GetName())
 
-	return nil, validateControlServer(controlserver)
+	warnings := collectControlServerWarnings(controlserver)
+	return warnings, validateControlServer(controlserver)
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type ControlServer.
@@ -106,7 +107,8 @@ func (v *ControlServerCustomValidator) ValidateUpdate(_ context.Context, oldObj,
 	}
 	controlserverlog.Info("Validation for ControlServer upon update", "name", controlserver.GetName())
 
-	return nil, validateControlServer(controlserver)
+	warnings := collectControlServerWarnings(controlserver)
+	return warnings, validateControlServer(controlserver)
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type ControlServer.
@@ -158,7 +160,7 @@ func validateControlServer(cs *kodiakv1alpha1.ControlServer) error {
 			allErrs = append(allErrs, field.Invalid(
 				field.NewPath("spec", "config", "tls"),
 				cs.Spec.Config.TLS,
-				"when TLS is enabled, must specify either acme, certSecretName, or both certFile and keyFile",
+				"must specify either acme, certSecretName, or both certFile and keyFile",
 			))
 		}
 	}
@@ -167,4 +169,20 @@ func validateControlServer(cs *kodiakv1alpha1.ControlServer) error {
 		return nil
 	}
 	return allErrs.ToAggregate()
+}
+
+func collectControlServerWarnings(cs *kodiakv1alpha1.ControlServer) admission.Warnings {
+	var warnings admission.Warnings
+
+	// Warn about TLS being disabled (security concern)
+	if cs.Spec.Config.TLS != nil && cs.Spec.Config.TLS.Disable {
+		warnings = append(warnings, "TLS is disabled; this is not recommended for production use")
+	}
+
+	// Warn about plain-text database URL (security concern)
+	if cs.Spec.Config.Database.URL != "" && cs.Spec.Config.Database.Type == "postgres" {
+		warnings = append(warnings, "using plain-text database URL is not recommended; consider using urlSecretRef instead")
+	}
+
+	return warnings
 }

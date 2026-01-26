@@ -73,7 +73,7 @@ func (i *authInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 		if i.auth != nil {
 			token, err := i.auth.GetToken()
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("failed to get auth token: %w", err)
 			}
 			if token != "" {
 				req.Header().Set("Authorization", fmt.Sprintf("Bearer %s", token))
@@ -104,7 +104,7 @@ func (i *authInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 func (c *ControlServerClient) CreateTailnet(ctx context.Context, request *pb.CreateTailnetRequest) (*pb.Tailnet, error) {
 	resp, err := c.client.CreateTailnet(ctx, connect.NewRequest(request))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create tailnet %q: %w", request.GetName(), err)
 	}
 
 	return resp.Msg.Tailnet, nil
@@ -118,7 +118,7 @@ func (c *ControlServerClient) GetTailnet(ctx context.Context, tailnetID uint64) 
 
 	resp, err := c.client.GetTailnet(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get tailnet %d: %w", tailnetID, err)
 	}
 
 	return resp.Msg.Tailnet, nil
@@ -128,7 +128,7 @@ func (c *ControlServerClient) GetTailnet(ctx context.Context, tailnetID uint64) 
 func (c *ControlServerClient) UpdateTailnet(ctx context.Context, request *pb.UpdateTailnetRequest) (*pb.Tailnet, error) {
 	resp, err := c.client.UpdateTailnet(ctx, connect.NewRequest(request))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to update tailnet %d: %w", request.GetTailnetId(), err)
 	}
 
 	return resp.Msg.Tailnet, nil
@@ -142,7 +142,10 @@ func (c *ControlServerClient) DeleteTailnet(ctx context.Context, tailnetID uint6
 	})
 
 	_, err := c.client.DeleteTailnet(ctx, req)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to delete tailnet %d: %w", tailnetID, err)
+	}
+	return nil
 }
 
 // ListTailnets lists all tailnets
@@ -151,7 +154,7 @@ func (c *ControlServerClient) ListTailnets(ctx context.Context) ([]*pb.Tailnet, 
 
 	resp, err := c.client.ListTailnets(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list tailnets: %w", err)
 	}
 
 	return resp.Msg.Tailnet, nil
@@ -172,7 +175,7 @@ func (c *ControlServerClient) CreateAuthKey(ctx context.Context, tailnetID uint6
 
 	resp, err := c.client.CreateAuthKey(ctx, req)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("failed to create auth key for tailnet %d: %w", tailnetID, err)
 	}
 
 	return resp.Msg.AuthKey, resp.Msg.Value, nil
@@ -185,7 +188,10 @@ func (c *ControlServerClient) DeleteAuthKey(ctx context.Context, authKeyID uint6
 	})
 
 	_, err := c.client.DeleteAuthKey(ctx, req)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to delete auth key %d: %w", authKeyID, err)
+	}
+	return nil
 }
 
 // ListAuthKeys lists auth keys for a tailnet
@@ -196,7 +202,7 @@ func (c *ControlServerClient) ListAuthKeys(ctx context.Context, tailnetID uint64
 
 	resp, err := c.client.ListAuthKeys(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list auth keys for tailnet %d: %w", tailnetID, err)
 	}
 
 	return resp.Msg.AuthKeys, nil
@@ -210,7 +216,7 @@ func (c *ControlServerClient) ListMachines(ctx context.Context, tailnetID uint64
 
 	resp, err := c.client.ListMachines(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list machines for tailnet %d: %w", tailnetID, err)
 	}
 
 	return resp.Msg.Machines, nil
@@ -226,7 +232,7 @@ func (c *ControlServerClient) EnableMachineRoutes(ctx context.Context, machineID
 
 	resp, err := c.client.EnableMachineRoutes(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to enable routes for machine %d: %w", machineID, err)
 	}
 
 	return resp.Msg.Routes, nil
@@ -239,7 +245,10 @@ func (c *ControlServerClient) DeleteMachine(ctx context.Context, machineID uint6
 	})
 
 	_, err := c.client.DeleteMachine(ctx, req)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to delete machine %d: %w", machineID, err)
+	}
+	return nil
 }
 
 // GetVersion gets the control server version
@@ -248,7 +257,7 @@ func (c *ControlServerClient) GetVersion(ctx context.Context) (*pb.GetVersionRes
 
 	resp, err := c.client.GetVersion(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get control server version: %w", err)
 	}
 
 	return resp.Msg, nil
