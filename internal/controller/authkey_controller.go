@@ -67,7 +67,8 @@ const (
 // AuthKeyReconciler reconciles a AuthKey object
 type AuthKeyReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme        *runtime.Scheme
+	ClientFactory controlclient.ClientFactory
 }
 
 // +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=authkeys,verbs=get;list;watch;create;update;patch;delete
@@ -168,7 +169,11 @@ func (r *AuthKeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	endpoint, skipVerify := deriveControlServerEndpoint(controlServer)
-	ctrlClient, err := controlclient.NewControlServerClient(endpoint, adminKey, skipVerify)
+	clientFactory := r.ClientFactory
+	if clientFactory == nil {
+		clientFactory = controlclient.DefaultClientFactory()
+	}
+	ctrlClient, err := clientFactory(endpoint, adminKey, skipVerify)
 	if err != nil {
 		logger.Error(err, "failed to create control server client", "endpoint", endpoint)
 		if err := r.setErrorStatus(ctx, &authKey, reasonAuthKeyError, fmt.Errorf("unable to construct control server client: %w", err)); err != nil {
@@ -272,7 +277,11 @@ func (r *AuthKeyReconciler) handleDeletion(ctx context.Context, resource *kodiak
 				adminKey, _, tokenErr := readAdminKey(ctx, r.Client, controlServer)
 				if tokenErr == nil && adminKey != "" {
 					endpoint, skipVerify := deriveControlServerEndpoint(controlServer)
-					ctrlClient, clientErr := controlclient.NewControlServerClient(endpoint, adminKey, skipVerify)
+					clientFactory := r.ClientFactory
+					if clientFactory == nil {
+						clientFactory = controlclient.DefaultClientFactory()
+					}
+					ctrlClient, clientErr := clientFactory(endpoint, adminKey, skipVerify)
 					if clientErr == nil {
 						if err := ctrlClient.DeleteAuthKey(ctx, resource.Status.KeyID); err != nil && !isConnectNotFound(err) {
 							logger.Error(err, "failed to delete auth key on control server")
@@ -298,7 +307,7 @@ func (r *AuthKeyReconciler) handleDeletion(ctx context.Context, resource *kodiak
 	return ctrl.Result{}, nil
 }
 
-func (r *AuthKeyReconciler) provisionNewAuthKey(ctx context.Context, resource *kodiakv1alpha1.AuthKey, client *controlclient.ControlServerClient, tailnetID uint64, secretName, specHash string) (ctrl.Result, error) {
+func (r *AuthKeyReconciler) provisionNewAuthKey(ctx context.Context, resource *kodiakv1alpha1.AuthKey, client controlclient.ControlServerClientInterface, tailnetID uint64, secretName, specHash string) (ctrl.Result, error) {
 	var expiryDuration time.Duration
 	if resource.Spec.Expiry != "" {
 		parsed, err := time.ParseDuration(resource.Spec.Expiry)
@@ -337,7 +346,7 @@ func (r *AuthKeyReconciler) provisionNewAuthKey(ctx context.Context, resource *k
 	return ctrl.Result{RequeueAfter: defaultAuthKeyRequeue}, nil
 }
 
-func (r *AuthKeyReconciler) findRemoteAuthKey(ctx context.Context, client *controlclient.ControlServerClient, tailnetID, keyID uint64) (*pb.AuthKey, error) {
+func (r *AuthKeyReconciler) findRemoteAuthKey(ctx context.Context, client controlclient.ControlServerClientInterface, tailnetID, keyID uint64) (*pb.AuthKey, error) {
 	keys, err := client.ListAuthKeys(ctx, tailnetID)
 	if err != nil {
 		return nil, err
@@ -436,7 +445,7 @@ func (r *AuthKeyReconciler) setErrorStatus(ctx context.Context, resource *kodiak
 	return r.Status().Update(ctx, resource)
 }
 
-func (r *AuthKeyReconciler) rotateAuthKey(ctx context.Context, resource *kodiakv1alpha1.AuthKey, client *controlclient.ControlServerClient, secretName, specHash string) error {
+func (r *AuthKeyReconciler) rotateAuthKey(ctx context.Context, resource *kodiakv1alpha1.AuthKey, client controlclient.ControlServerClientInterface, secretName, specHash string) error {
 	if resource.Status.KeyID != 0 {
 		if err := client.DeleteAuthKey(ctx, resource.Status.KeyID); err != nil && !isConnectNotFound(err) {
 			return fmt.Errorf("failed to delete existing auth key %d: %w", resource.Status.KeyID, err)

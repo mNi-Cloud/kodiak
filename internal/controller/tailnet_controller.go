@@ -61,7 +61,8 @@ const (
 // TailnetReconciler reconciles a Tailnet object
 type TailnetReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme        *runtime.Scheme
+	ClientFactory controlclient.ClientFactory
 }
 
 // +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets,verbs=get;list;watch;create;update;patch;delete
@@ -139,7 +140,11 @@ func (r *TailnetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	endpoint, skipVerify := deriveControlServerEndpoint(controlServer)
-	ctrlClient, err := controlclient.NewControlServerClient(endpoint, adminKey, skipVerify)
+	clientFactory := r.ClientFactory
+	if clientFactory == nil {
+		clientFactory = controlclient.DefaultClientFactory()
+	}
+	ctrlClient, err := clientFactory(endpoint, adminKey, skipVerify)
 	if err != nil {
 		logger.Error(err, "failed to create control server client", "endpoint", endpoint, "skipVerify", skipVerify)
 		if err := r.setErrorStatus(ctx, &tailnet, reasonTailnetError, fmt.Errorf("unable to construct control server client: %w", err)); err != nil {
@@ -229,7 +234,11 @@ func (r *TailnetReconciler) deleteRemoteTailnet(ctx context.Context, controlServ
 	}
 
 	endpoint, skipVerify := deriveControlServerEndpoint(controlServer)
-	ctrlClient, err := controlclient.NewControlServerClient(endpoint, adminKey, skipVerify)
+	clientFactory := r.ClientFactory
+	if clientFactory == nil {
+		clientFactory = controlclient.DefaultClientFactory()
+	}
+	ctrlClient, err := clientFactory(endpoint, adminKey, skipVerify)
 	if err != nil {
 		return fmt.Errorf("failed to create control server client for deletion: %w", err)
 	}
@@ -240,7 +249,7 @@ func (r *TailnetReconciler) deleteRemoteTailnet(ctx context.Context, controlServ
 	return nil
 }
 
-func (r *TailnetReconciler) syncTailnet(ctx context.Context, resource *kodiakv1alpha1.Tailnet, client *controlclient.ControlServerClient) (*pb.Tailnet, string, string, error) {
+func (r *TailnetReconciler) syncTailnet(ctx context.Context, resource *kodiakv1alpha1.Tailnet, client controlclient.ControlServerClientInterface) (*pb.Tailnet, string, string, error) {
 	dnsConfig := buildDNSConfig(resource.Spec.DNSConfig)
 	createReq := buildCreateTailnetRequest(resource.Spec, dnsConfig)
 
@@ -294,7 +303,7 @@ func (r *TailnetReconciler) syncTailnet(ctx context.Context, resource *kodiakv1a
 	return remote, reasonTailnetSynced, "Tailnet configuration already up to date", nil
 }
 
-func (r *TailnetReconciler) fetchMachineCount(ctx context.Context, client *controlclient.ControlServerClient, tailnetID uint64) (int, error) {
+func (r *TailnetReconciler) fetchMachineCount(ctx context.Context, client controlclient.ControlServerClientInterface, tailnetID uint64) (int, error) {
 	machines, err := client.ListMachines(ctx, tailnetID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to list machines for tailnet %d: %w", tailnetID, err)

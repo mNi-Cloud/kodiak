@@ -120,8 +120,13 @@ type DatabaseConfig struct {
 	Type string `json:"type,omitempty"`
 
 	// +optional
-	// URL for database connection
+	// URL for database connection (plain text, not recommended for production)
 	URL string `json:"url,omitempty"`
+
+	// +optional
+	// URLSecretRef references a secret containing the database connection URL
+	// The secret key should contain the full connection string (e.g., postgres://user:pass@host:5432/db)
+	URLSecretRef *corev1.SecretKeySelector `json:"urlSecretRef,omitempty"`
 }
 
 // TLSConfig defines TLS settings

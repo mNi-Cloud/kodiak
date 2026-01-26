@@ -85,9 +85,10 @@ type resolvedAuthKey struct {
 // ConnectorReconciler reconciles a Connector object
 type ConnectorReconciler struct {
 	client.Client
-	Scheme     *runtime.Scheme
-	RESTClient rest.Interface
-	Config     *rest.Config
+	Scheme        *runtime.Scheme
+	RESTClient    rest.Interface
+	Config        *rest.Config
+	ClientFactory controlclient.ClientFactory
 }
 
 // +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=connectors,verbs=get;list;watch;create;update;patch;delete
@@ -1086,7 +1087,11 @@ func (r *ConnectorReconciler) enableRoutesIfNeeded(ctx context.Context, resource
 	}
 
 	endpoint, skipVerify := deriveControlServerEndpoint(&controlServer)
-	ctrlClient, err := controlclient.NewControlServerClient(endpoint, adminKey, skipVerify)
+	clientFactory := r.ClientFactory
+	if clientFactory == nil {
+		clientFactory = controlclient.DefaultClientFactory()
+	}
+	ctrlClient, err := clientFactory(endpoint, adminKey, skipVerify)
 	if err != nil {
 		logger.Error(err, "Failed to create control server client", "endpoint", endpoint)
 		return

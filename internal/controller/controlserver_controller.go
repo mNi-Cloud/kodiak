@@ -102,9 +102,36 @@ func (r *ControlServerReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
+	// Read database URL from secret if specified
+	databaseURL := resource.Spec.Config.Database.URL
+	if resource.Spec.Config.Database.URLSecretRef != nil {
+		secretRef := resource.Spec.Config.Database.URLSecretRef
+		secret := &corev1.Secret{}
+		if err := r.Get(ctx, types.NamespacedName{Name: secretRef.Name, Namespace: resource.Namespace}, secret); err != nil {
+			if errors.IsNotFound(err) {
+				logger.Info("database URL secret not found", "secret", secretRef.Name)
+				r.updateStatusWithError(ctx, &resource, "DatabaseSecretNotFound", fmt.Errorf("database URL secret %q not found", secretRef.Name))
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+			logger.Error(err, "failed to fetch database URL secret", "secret", secretRef.Name)
+			return ctrl.Result{}, err
+		}
+		key := secretRef.Key
+		if key == "" {
+			key = "url"
+		}
+		if val, ok := secret.Data[key]; ok {
+			databaseURL = strings.TrimSpace(string(val))
+		} else {
+			logger.Info("database URL key not found in secret", "secret", secretRef.Name, "key", key)
+			r.updateStatusWithError(ctx, &resource, "DatabaseSecretKeyNotFound", fmt.Errorf("key %q not found in secret %q", key, secretRef.Name))
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+	}
+
 	portCfg := extractPortConfiguration(&resource)
 
-	configData, err := renderControlServerConfig(&resource, adminSecret != nil, resource.Spec.Config.Auth, oidcSecret != nil)
+	configData, err := renderControlServerConfig(&resource, adminSecret != nil, resource.Spec.Config.Auth, oidcSecret != nil, databaseURL)
 	if err != nil {
 		logger.Error(err, "failed to render ionscale configuration")
 		return ctrl.Result{}, err
@@ -236,11 +263,9 @@ func (r *ControlServerReconciler) reconcileConfigMap(ctx context.Context, resour
 	return err
 }
 
-func (r *ControlServerReconciler) reconcilePVC(ctx context.Context, resource *kodiakv1alpha1.ControlServer) error {
-	if resource.Spec.Storage == nil {
-		return nil
-	}
+const defaultStorageSize = "10Gi"
 
+func (r *ControlServerReconciler) reconcilePVC(ctx context.Context, resource *kodiakv1alpha1.ControlServer) error {
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pvcName(resource),
@@ -261,13 +286,16 @@ func (r *ControlServerReconciler) reconcilePVC(ctx context.Context, resource *ko
 			pvc.Spec.Resources.Requests = corev1.ResourceList{}
 		}
 
-		size := resource.Spec.Storage.Size
-		if size == "" {
-			size = "10Gi"
+		// Use spec.storage.size if provided, otherwise default to 10Gi
+		size := defaultStorageSize
+		if resource.Spec.Storage != nil && resource.Spec.Storage.Size != "" {
+			size = resource.Spec.Storage.Size
 		}
 		pvc.Spec.Resources.Requests[corev1.ResourceStorage] = apiresource.MustParse(size)
-		if class := resource.Spec.Storage.StorageClassName; class != "" {
-			pvc.Spec.StorageClassName = ptr.To(class)
+
+		// Use storage class if explicitly specified
+		if resource.Spec.Storage != nil && resource.Spec.Storage.StorageClassName != "" {
+			pvc.Spec.StorageClassName = ptr.To(resource.Spec.Storage.StorageClassName)
 		}
 
 		return nil
@@ -370,21 +398,15 @@ func (r *ControlServerReconciler) reconcileDeployment(ctx context.Context, resou
 			},
 		}
 
-		if resource.Spec.Storage != nil {
-			volumes = append(volumes, corev1.Volume{
-				Name: "data",
-				VolumeSource: corev1.VolumeSource{
-					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-						ClaimName: pvcName(resource),
-					},
+		// Always use PVC for data persistence (default 10Gi if not specified)
+		volumes = append(volumes, corev1.Volume{
+			Name: "data",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: pvcName(resource),
 				},
-			})
-		} else {
-			volumes = append(volumes, corev1.Volume{
-				Name:         "data",
-				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-			})
-		}
+			},
+		})
 
 		hasTLS := resource.Spec.Config.TLS != nil && resource.Spec.Config.TLS.CertSecretName != ""
 		if hasTLS {
@@ -594,7 +616,7 @@ func extractPort(addr string, fallback int32) int32 {
 	return fallback
 }
 
-func renderControlServerConfig(resource *kodiakv1alpha1.ControlServer, includeAdminKey bool, auth *kodiakv1alpha1.AuthConfig, includeOIDCSecret bool) (string, error) {
+func renderControlServerConfig(resource *kodiakv1alpha1.ControlServer, includeAdminKey bool, auth *kodiakv1alpha1.AuthConfig, includeOIDCSecret bool, databaseURL string) (string, error) {
 	spec := resource.Spec
 
 	cfg := controlServerConfig{
@@ -603,10 +625,10 @@ func renderControlServerConfig(resource *kodiakv1alpha1.ControlServer, includeAd
 		StunListenAddr:    spec.Config.StunListenAddr,
 	}
 
-	if spec.Config.Database.URL != "" || spec.Config.Database.Type != "" {
+	if databaseURL != "" || spec.Config.Database.Type != "" {
 		cfg.Database = &controlServerDatabaseConfig{
 			Type: spec.Config.Database.Type,
-			URL:  spec.Config.Database.URL,
+			URL:  databaseURL,
 		}
 	}
 

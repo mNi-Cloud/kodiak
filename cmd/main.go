@@ -41,6 +41,7 @@ import (
 
 	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
 	"github.com/mNi-Cloud/kodiak/internal/controller"
+	webhookv1alpha1 "github.com/mNi-Cloud/kodiak/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -241,6 +242,34 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AuthKey")
 		os.Exit(1)
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupControlServerWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "ControlServer")
+			os.Exit(1)
+		}
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupTailnetWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "Tailnet")
+			os.Exit(1)
+		}
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupAuthKeyWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "AuthKey")
+			os.Exit(1)
+		}
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupConnectorWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "Connector")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 
