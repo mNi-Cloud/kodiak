@@ -463,12 +463,11 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 		}
 	}
 
-	// If a running Pod exists and the Deployment has ReadyReplicas, no update is needed
+	// Log deployment status
 	if podRunning && found.Status.ReadyReplicas > 0 {
 		logger.Info("Deployment already exists with running pod",
 			"Name", found.Name,
 			"ReadyReplicas", found.Status.ReadyReplicas)
-		return ctrl.Result{}, nil
 	}
 
 	// Determine if Deployment needs updates by comparing specs
@@ -491,6 +490,12 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 		logger.Info("Resources need update")
 	}
 
+	// Check if pod template annotations need update
+	if !reflect.DeepEqual(deploy.Spec.Template.Annotations, found.Spec.Template.Annotations) {
+		needsUpdate = true
+		logger.Info("Pod template annotations need update")
+	}
+
 	// Only update if needed to avoid conflicts
 	if needsUpdate {
 		logger.Info("Updating Deployment", "Name", found.Name)
@@ -500,6 +505,7 @@ func (r *ConnectorReconciler) reconcileDeployment(ctx context.Context, cr *v1alp
 		updatedContainer.Image = desiredContainer.Image
 		updatedContainer.Env = desiredContainer.Env
 		updatedContainer.Resources = desiredContainer.Resources
+		updatedDeploy.Spec.Template.Annotations = deploy.Spec.Template.Annotations
 
 		if err = r.Update(ctx, updatedDeploy); err != nil {
 			// If conflict occurred, log but don't return error
