@@ -20,20 +20,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"time"
 
 	"github.com/bufbuild/connect-go"
 	pb "github.com/jsiebens/ionscale/pkg/gen/ionscale/v1"
 	controlclient "github.com/mNi-Cloud/kodiak/internal/client"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/yaml"
 
 	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
 )
@@ -65,6 +69,7 @@ type TailnetReconciler struct {
 // +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
 func (r *TailnetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("tailnet", req.NamespacedName)
@@ -250,6 +255,7 @@ func (r *TailnetReconciler) fetchMachineCount(ctx context.Context, client contro
 
 func (r *TailnetReconciler) setReadyStatus(ctx context.Context, resource *kodiakv1alpha1.Tailnet, tailnetID uint64, machineCount int, reason, message string) error {
 	current := resource.DeepCopy()
+	logger := log.FromContext(ctx)
 
 	now := metav1.Now()
 	upsertCondition(&resource.Status.Conditions, metav1.Condition{
@@ -266,6 +272,14 @@ func (r *TailnetReconciler) setReadyStatus(ctx context.Context, resource *kodiak
 	resource.Status.MachineCount = machineCount
 	syncTime := metav1.NewTime(time.Now().UTC())
 	resource.Status.LastSyncTime = &syncTime
+
+	// Set ControlServerUrl from ionscale-config ConfigMap
+	publicAddr, err := r.getIonscalePublicAddr(ctx)
+	if err != nil {
+		logger.Error(err, "failed to get ionscale public address, ControlServerUrl will be empty")
+	} else {
+		resource.Status.ControlServerUrl = publicAddr
+	}
 
 	if equality.Semantic.DeepEqual(current.Status, resource.Status) {
 		return nil
@@ -439,4 +453,47 @@ func isConnectNotFound(err error) bool {
 		return connectErr.Code() == connect.CodeNotFound
 	}
 	return false
+}
+
+// ionscaleConfig represents the ionscale configuration structure
+type ionscaleConfig struct {
+	PublicAddr string `json:"public_addr" yaml:"public_addr"`
+}
+
+// getIonscalePublicAddr reads the public_addr from ionscale-config ConfigMap
+func (r *TailnetReconciler) getIonscalePublicAddr(ctx context.Context) (string, error) {
+	namespace := os.Getenv("POD_NAMESPACE")
+	if namespace == "" {
+		namespace = "kodiak-system"
+	}
+
+	// ConfigMap name can be customized via environment variable (for kustomize namePrefix)
+	configMapName := os.Getenv("IONSCALE_CONFIG_NAME")
+	if configMapName == "" {
+		configMapName = "ionscale-config"
+	}
+
+	var cm corev1.ConfigMap
+	if err := r.Get(ctx, types.NamespacedName{
+		Namespace: namespace,
+		Name:      configMapName,
+	}, &cm); err != nil {
+		return "", fmt.Errorf("failed to get %s ConfigMap: %w", configMapName, err)
+	}
+
+	configData, ok := cm.Data["config.yaml"]
+	if !ok {
+		return "", fmt.Errorf("config.yaml not found in ionscale-config ConfigMap")
+	}
+
+	var config ionscaleConfig
+	if err := yaml.Unmarshal([]byte(configData), &config); err != nil {
+		return "", fmt.Errorf("failed to parse ionscale config: %w", err)
+	}
+
+	if config.PublicAddr == "" {
+		return "", fmt.Errorf("public_addr not configured in ionscale-config")
+	}
+
+	return config.PublicAddr, nil
 }

@@ -30,7 +30,7 @@ database:
 # =============================================================================
 tls:
   disable: true
-  # force_https: true
+  force_https: false
   # cert_file: ""
   # key_file: ""
   # acme: false

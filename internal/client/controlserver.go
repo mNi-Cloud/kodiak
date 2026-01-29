@@ -21,6 +21,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/bufbuild/connect-go"
@@ -38,15 +40,28 @@ type ControlServerClient struct {
 
 // NewControlServerClient creates a new control server client
 func NewControlServerClient(serverURL string, systemAdminKey string, insecureSkipVerify bool) (*ControlServerClient, error) {
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: insecureSkipVerify,
+	// Parse URL to determine if TLS should be used
+	parsedURL, err := url.Parse(serverURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse server URL: %w", err)
+	}
+
+	var transport http.RoundTripper
+	if strings.ToLower(parsedURL.Scheme) == "https" {
+		// Use TLS transport for HTTPS
+		transport = &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: insecureSkipVerify,
+			},
+		}
+	} else {
+		// Use plain HTTP transport without TLS
+		transport = &http.Transport{}
 	}
 
 	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
-		},
-		Timeout: 30 * time.Second,
+		Transport: transport,
+		Timeout:   30 * time.Second,
 	}
 
 	auth, err := ionscaleclient.LoadClientAuth(serverURL, systemAdminKey)

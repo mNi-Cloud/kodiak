@@ -43,6 +43,12 @@ patches:
     kind: Deployment
     name: controller-manager
 
+# [IONSCALE] Configure ionscale service and configmap names with namePrefix
+- path: manager_ionscale_patch.yaml
+  target:
+    kind: Deployment
+    name: controller-manager
+
 # Uncomment the patches line if you enable Metrics and CertManager
 # [METRICS-WITH-CERTS] To enable metrics protected with certManager, uncomment the following line.
 # This patch will protect the metrics with certManager self-signed certs.

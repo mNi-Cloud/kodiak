@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+spec:
+  template:
+    spec:
+      containers:
+      - name: manager
+        args:
+        - --leader-elect
+        - --health-probe-bind-address=:8081
+        - --ionscale-endpoint=http://kodiak-ionscale.$(POD_NAMESPACE).svc.cluster.local:8080
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: IONSCALE_ADMIN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: kodiak-ionscale-admin
+              key: systemAdminKey
+        - name: IONSCALE_CONFIG_NAME
+          value: kodiak-ionscale-config

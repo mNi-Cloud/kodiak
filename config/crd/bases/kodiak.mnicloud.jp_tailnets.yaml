@@ -175,6 +175,10 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              controlServerUrl:
+                description: ControlServerUrl is the public URL of the ionscale control
+                  server
+                type: string
               lastSyncTime:
                 description: LastSyncTime is the last time the tailnet was synced
                 format: date-time

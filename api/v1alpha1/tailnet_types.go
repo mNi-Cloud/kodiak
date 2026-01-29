@@ -106,6 +106,10 @@ type TailnetStatus struct {
 	MachineCount int `json:"machineCount,omitempty"`
 
 	// +optional
+	// ControlServerUrl is the public URL of the ionscale control server
+	ControlServerUrl string `json:"controlServerUrl,omitempty"`
+
+	// +optional
 	// LastSyncTime is the last time the tailnet was synced
 	LastSyncTime *metav1.Time `json:"lastSyncTime,omitempty"`
 

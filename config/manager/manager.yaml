@@ -76,6 +76,8 @@ spec:
             secretKeyRef:
               name: ionscale-admin
               key: systemAdminKey
+        - name: IONSCALE_CONFIG_NAME
+          value: ionscale-config
         ports: []
         securityContext:
           allowPrivilegeEscalation: false
