@@ -1,24 +1,99 @@
 # ionscale configuration - PostgreSQL backend
-# Recommended for production deployments
+# Reference: https://jsiebens.github.io/ionscale/configuration/
 
+# =============================================================================
+# Network Settings
+# =============================================================================
 listen_addr: ":8080"
 metrics_listen_addr: ":9091"
 stun_listen_addr: ":3478"
 
-# Server URL - adjust if using Ingress or LoadBalancer
-server_url: "http://ionscale.kodiak-system.svc.cluster.local:8080"
+# Public address - client-facing HTTPS endpoint (required)
+public_addr: "http://ionscale.kodiak-system.svc.cluster.local:8080"
 
-# PostgreSQL database
-# Update the connection string for your environment
+# Public STUN endpoint
+stun_public_addr: "ionscale.kodiak-system.svc.cluster.local:3478"
+
+# =============================================================================
+# Database Settings
+# =============================================================================
 database:
   type: postgres
   url: postgres://ionscale:changeme@postgres.kodiak-system.svc:5432/ionscale?sslmode=disable
+  # max_open_conns: 0
+  # max_idle_conns: 0
+  # conn_max_life_time: ""
+  # conn_max_idle_time: ""
 
-# TLS disabled for in-cluster communication
-# Enable TLS for production with Ingress
+# =============================================================================
+# TLS Settings
+# =============================================================================
 tls:
   disable: true
+  # force_https: true
+  # cert_file: ""
+  # key_file: ""
+  # acme: false
+  # acme_email: ""
+  # acme_ca: ""
 
+# =============================================================================
+# Keys
+# =============================================================================
+# Note: For production, override this secret or use Helm chart
+keys:
+  system_admin_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  # control_key: ""
+  # legacy_control_key: ""
+
+# =============================================================================
+# DERP Settings
+# =============================================================================
+# Embedded DERP server (set disabled: true to use external only)
+# derp:
+#   server:
+#     disabled: false
+#     region_id: 1000
+#     region_code: "ionscale"
+#     region_name: "ionscale"
+#   # External DERP map sources (URLs)
+#   sources:
+#     - https://controlplane.tailscale.com/derpmap/default
+
+# =============================================================================
+# DNS Settings
+# =============================================================================
+# dns:
+#   magic_dns_suffix: "ionscale.net"
+#   provider:
+#     name: ""
+#     zone: ""
+#     config: {}
+
+# =============================================================================
+# OIDC Authentication
+# =============================================================================
+# auth:
+#   provider:
+#     issuer: ""
+#     client_id: ""
+#     client_secret: ""
+#     additional_scopes: []
+#   system_admins:
+#     emails: []
+#     subs: []
+#     filters: []
+
+# =============================================================================
+# Polling Settings
+# =============================================================================
+# poll_net:
+#   keep_alive_interval: "1m"
+
+# =============================================================================
 # Logging
+# =============================================================================
 logging:
   level: info
+  # format: text
+  # file: ""

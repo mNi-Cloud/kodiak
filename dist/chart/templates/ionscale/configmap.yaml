@@ -8,12 +8,15 @@ metadata:
     {{- include "kodiak.ionscale.labels" . | nindent 4 }}
 data:
   config.yaml: |
+    # Network Settings
     listen_addr: ":8080"
     metrics_listen_addr: ":9091"
     stun_listen_addr: ":3478"
 
-    server_url: {{ include "kodiak.ionscale.serverUrl" . | quote }}
+    public_addr: {{ include "kodiak.ionscale.serverUrl" . | quote }}
+    stun_public_addr: "{{ include "kodiak.fullname" . }}-ionscale.{{ .Release.Namespace }}.svc.cluster.local:3478"
 
+    # Database
     database:
       {{- if eq .Values.ionscale.database.type "postgres" }}
       type: postgres
@@ -23,19 +26,30 @@ data:
       url: /var/lib/ionscale/ionscale.db
       {{- end }}
 
+    # TLS
     tls:
       disable: {{ .Values.ionscale.tls.disable }}
 
-    {{- if .Values.ionscale.derp.enabled }}
+    # Keys
+    keys:
+      system_admin_key: ${IONSCALE_SYSTEM_ADMIN_KEY}
+
+    # DERP
     derp:
       server:
-        disabled: false
+        disabled: {{ not .Values.ionscale.derp.enabled }}
+        {{- if .Values.ionscale.derp.enabled }}
         region_id: {{ .Values.ionscale.derp.regionId }}
         region_code: {{ .Values.ionscale.derp.regionCode | quote }}
         region_name: {{ .Values.ionscale.derp.regionName | quote }}
         stun_port: {{ .Values.ionscale.derp.stunPort }}
-    {{- end }}
+        {{- end }}
+      {{- if .Values.ionscale.derp.sources }}
+      sources:
+        {{- toYaml .Values.ionscale.derp.sources | nindent 8 }}
+      {{- end }}
 
+    # Logging
     logging:
       level: {{ .Values.ionscale.logging.level }}
 {{- end }}

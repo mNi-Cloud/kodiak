@@ -7,10 +7,11 @@ resources:
 
 # Default: Development key (DO NOT use in production)
 # Production deployments should override this secret
+# Key must be 64 hex characters (32 bytes)
 secretGenerator:
 - name: ionscale-admin
   literals:
-  - systemAdminKey=dev-only-ionscale-admin-key-do-not-use-in-production
+  - systemAdminKey=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   options:
     disableNameSuffixHash: true
 

@@ -99,11 +99,19 @@ ionscale:
 
   # DERP server configuration
   derp:
+    # Enable embedded DERP server
     enabled: false
+    # Embedded DERP settings (when enabled: true)
     regionId: 900
     regionCode: "local"
     regionName: "Local DERP"
     stunPort: 3478
+    # External DERP map sources (URLs)
+    # Use external DERP servers instead of embedded
+    sources: []
+    # Example:
+    # sources:
+    #   - https://controlplane.tailscale.com/derpmap/default
 
   # Logging
   logging:
