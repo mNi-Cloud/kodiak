@@ -24,7 +24,6 @@ import (
 	pb "github.com/jsiebens/ionscale/pkg/gen/ionscale/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -40,8 +39,8 @@ var _ = Describe("Tailnet Controller", func() {
 		interval = time.Millisecond * 250
 	)
 
-	Context("When ControlServer reference is missing", func() {
-		const tailnetName = "test-tailnet-no-ref"
+	Context("When ionscale configuration is missing", func() {
+		const tailnetName = "test-tailnet-no-config"
 
 		ctx := context.Background()
 
@@ -61,8 +60,8 @@ var _ = Describe("Tailnet Controller", func() {
 			}
 		})
 
-		It("should set Pending status", func() {
-			By("Creating a Tailnet without ControlServer reference")
+		It("should set Pending status when ionscale config is missing", func() {
+			By("Creating a Tailnet")
 			resource := &kodiakv1alpha1.Tailnet{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      tailnetName,
@@ -70,15 +69,16 @@ var _ = Describe("Tailnet Controller", func() {
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
 					Name: "test-tailnet",
-					// ControlServerRef is not set
 				},
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			By("Reconciling the resource")
+			By("Reconciling the resource without ionscale configuration")
 			reconciler := &TailnetReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				IonscaleEndpoint: "", // Missing configuration
+				IonscaleAdminKey: "", // Missing configuration
 			}
 
 			// First reconcile adds finalizer
@@ -102,8 +102,8 @@ var _ = Describe("Tailnet Controller", func() {
 		})
 	})
 
-	Context("When ControlServer is not found", func() {
-		const tailnetName = "test-tailnet-missing-cs"
+	Context("When reconciling a Tailnet resource", func() {
+		const tailnetName = "test-tailnet-basic"
 
 		ctx := context.Background()
 
@@ -122,8 +122,8 @@ var _ = Describe("Tailnet Controller", func() {
 			}
 		})
 
-		It("should set Pending status with ControlServerNotFound reason", func() {
-			By("Creating a Tailnet with non-existent ControlServer reference")
+		It("should add finalizer to the resource", func() {
+			By("Creating a Tailnet resource")
 			resource := &kodiakv1alpha1.Tailnet{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      tailnetName,
@@ -131,177 +131,38 @@ var _ = Describe("Tailnet Controller", func() {
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
 					Name: "test-tailnet",
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: "non-existent-control-server",
-					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
 			By("Reconciling the resource")
 			reconciler := &TailnetReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				IonscaleEndpoint: "http://ionscale.test.svc:8080",
+				IonscaleAdminKey: "test-admin-key",
 			}
 
-			// First reconcile adds finalizer
 			result, err := reconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Requeue).To(BeTrue())
 
-			if result.Requeue {
-				_, err = reconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
-				})
-				Expect(err).NotTo(HaveOccurred())
-			}
-
-			By("Checking that status is Pending with correct reason")
-			updatedResource := &kodiakv1alpha1.Tailnet{}
-			Expect(k8sClient.Get(ctx, typeNamespacedName, updatedResource)).To(Succeed())
-			Expect(updatedResource.Status.Phase).To(Equal("Pending"))
-			Expect(updatedResource.Status.Ready).To(BeFalse())
-
-			var readyCondition *metav1.Condition
-			for i := range updatedResource.Status.Conditions {
-				if updatedResource.Status.Conditions[i].Type == "Ready" {
-					readyCondition = &updatedResource.Status.Conditions[i]
-					break
-				}
-			}
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Reason).To(Equal(reasonControlServerNotFound))
-		})
-	})
-
-	Context("When ControlServer is not ready", func() {
-		const (
-			tailnetName       = "test-tailnet-cs-not-ready"
-			controlServerName = "test-cs-not-ready"
-		)
-
-		ctx := context.Background()
-
-		tailnetNamespacedName := types.NamespacedName{
-			Name:      tailnetName,
-			Namespace: "default",
-		}
-
-		controlServerNamespacedName := types.NamespacedName{
-			Name:      controlServerName,
-			Namespace: "default",
-		}
-
-		AfterEach(func() {
-			tailnet := &kodiakv1alpha1.Tailnet{}
-			err := k8sClient.Get(ctx, tailnetNamespacedName, tailnet)
-			if err == nil {
-				tailnet.Finalizers = nil
-				_ = k8sClient.Update(ctx, tailnet)
-				_ = k8sClient.Delete(ctx, tailnet)
-			}
-
-			cs := &kodiakv1alpha1.ControlServer{}
-			err = k8sClient.Get(ctx, controlServerNamespacedName, cs)
-			if err == nil {
-				cs.Finalizers = nil
-				_ = k8sClient.Update(ctx, cs)
-				_ = k8sClient.Delete(ctx, cs)
-			}
-		})
-
-		It("should set Pending status with ControlServerNotReady reason", func() {
-			By("Creating a ControlServer that is not ready")
-			controlServer := &kodiakv1alpha1.ControlServer{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      controlServerName,
-					Namespace: "default",
-				},
-				Spec: kodiakv1alpha1.ControlServerSpec{
-					Image: "ghcr.io/jsiebens/ionscale:latest",
-					Config: kodiakv1alpha1.ControlServerConfig{
-						TLS: &kodiakv1alpha1.TLSConfig{
-							Disable: true,
-						},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, controlServer)).To(Succeed())
-
-			By("Creating a Tailnet referencing the ControlServer")
-			tailnet := &kodiakv1alpha1.Tailnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      tailnetName,
-					Namespace: "default",
-				},
-				Spec: kodiakv1alpha1.TailnetSpec{
-					Name: "test-tailnet",
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: controlServerName,
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, tailnet)).To(Succeed())
-
-			By("Reconciling the Tailnet")
-			reconciler := &TailnetReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
-
-			// First reconcile adds finalizer
-			result, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: tailnetNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			if result.Requeue {
-				_, err = reconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: tailnetNamespacedName,
-				})
-				Expect(err).NotTo(HaveOccurred())
-			}
-
-			By("Checking that Tailnet status is Pending")
-			updatedTailnet := &kodiakv1alpha1.Tailnet{}
-			Expect(k8sClient.Get(ctx, tailnetNamespacedName, updatedTailnet)).To(Succeed())
-			Expect(updatedTailnet.Status.Phase).To(Equal("Pending"))
-			Expect(updatedTailnet.Status.Ready).To(BeFalse())
-
-			var readyCondition *metav1.Condition
-			for i := range updatedTailnet.Status.Conditions {
-				if updatedTailnet.Status.Conditions[i].Type == "Ready" {
-					readyCondition = &updatedTailnet.Status.Conditions[i]
-					break
-				}
-			}
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Reason).To(Equal(reasonControlServerNotReady))
+			By("Checking that finalizer was added")
+			updated := &kodiakv1alpha1.Tailnet{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Finalizers).To(ContainElement(kodiakFinalizer))
 		})
 	})
 
 	Context("When successfully creating a Tailnet with mock client", func() {
-		const (
-			tailnetName       = "test-tailnet-success"
-			controlServerName = "test-cs-success"
-			adminSecretName   = "test-admin-secret"
-		)
+		const tailnetName = "test-tailnet-success"
 
 		ctx := context.Background()
 
 		tailnetNamespacedName := types.NamespacedName{
 			Name:      tailnetName,
-			Namespace: "default",
-		}
-
-		controlServerNamespacedName := types.NamespacedName{
-			Name:      controlServerName,
-			Namespace: "default",
-		}
-
-		secretNamespacedName := types.NamespacedName{
-			Name:      adminSecretName,
 			Namespace: "default",
 		}
 
@@ -313,60 +174,9 @@ var _ = Describe("Tailnet Controller", func() {
 				_ = k8sClient.Update(ctx, tailnet)
 				_ = k8sClient.Delete(ctx, tailnet)
 			}
-
-			cs := &kodiakv1alpha1.ControlServer{}
-			err = k8sClient.Get(ctx, controlServerNamespacedName, cs)
-			if err == nil {
-				cs.Finalizers = nil
-				_ = k8sClient.Update(ctx, cs)
-				_ = k8sClient.Delete(ctx, cs)
-			}
-
-			secret := &corev1.Secret{}
-			err = k8sClient.Get(ctx, secretNamespacedName, secret)
-			if err == nil {
-				_ = k8sClient.Delete(ctx, secret)
-			}
 		})
 
 		It("should create Tailnet and set Ready status", func() {
-			By("Creating the admin secret")
-			secret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      adminSecretName,
-					Namespace: "default",
-				},
-				Data: map[string][]byte{
-					"systemAdminKey": []byte("test-admin-key"),
-				},
-			}
-			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
-
-			By("Creating a ready ControlServer")
-			controlServer := &kodiakv1alpha1.ControlServer{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      controlServerName,
-					Namespace: "default",
-					Annotations: map[string]string{
-						"kodiak.mnicloud.jp/system-admin-key-secret": adminSecretName,
-					},
-				},
-				Spec: kodiakv1alpha1.ControlServerSpec{
-					Image: "ghcr.io/jsiebens/ionscale:latest",
-					Config: kodiakv1alpha1.ControlServerConfig{
-						TLS: &kodiakv1alpha1.TLSConfig{
-							Disable: true,
-						},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, controlServer)).To(Succeed())
-
-			controlServer.Status.Ready = true
-			controlServer.Status.Endpoint = "http://test-cs-success-service.default.svc.cluster.local:8080"
-			controlServer.Status.Phase = "Ready"
-			Expect(k8sClient.Status().Update(ctx, controlServer)).To(Succeed())
-
 			By("Creating a Tailnet")
 			tailnet := &kodiakv1alpha1.Tailnet{
 				ObjectMeta: metav1.ObjectMeta{
@@ -375,9 +185,6 @@ var _ = Describe("Tailnet Controller", func() {
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
 					Name: "test-tailnet",
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: controlServerName,
-					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, tailnet)).To(Succeed())
@@ -400,9 +207,11 @@ var _ = Describe("Tailnet Controller", func() {
 
 			By("Reconciling the Tailnet with mock client")
 			reconciler := &TailnetReconciler{
-				Client:        k8sClient,
-				Scheme:        k8sClient.Scheme(),
-				ClientFactory: controlclient.NewMockClientFactory(mockClient),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				ClientFactory:    controlclient.NewMockClientFactory(mockClient),
+				IonscaleEndpoint: "http://ionscale.test.svc:8080",
+				IonscaleAdminKey: "test-admin-key",
 			}
 
 			// First reconcile adds finalizer
@@ -432,26 +241,12 @@ var _ = Describe("Tailnet Controller", func() {
 	})
 
 	Context("When ionscale API fails", func() {
-		const (
-			tailnetName       = "test-tailnet-api-fail"
-			controlServerName = "test-cs-api-fail"
-			adminSecretName   = "test-admin-secret-fail"
-		)
+		const tailnetName = "test-tailnet-api-fail"
 
 		ctx := context.Background()
 
 		tailnetNamespacedName := types.NamespacedName{
 			Name:      tailnetName,
-			Namespace: "default",
-		}
-
-		controlServerNamespacedName := types.NamespacedName{
-			Name:      controlServerName,
-			Namespace: "default",
-		}
-
-		secretNamespacedName := types.NamespacedName{
-			Name:      adminSecretName,
 			Namespace: "default",
 		}
 
@@ -463,60 +258,9 @@ var _ = Describe("Tailnet Controller", func() {
 				_ = k8sClient.Update(ctx, tailnet)
 				_ = k8sClient.Delete(ctx, tailnet)
 			}
-
-			cs := &kodiakv1alpha1.ControlServer{}
-			err = k8sClient.Get(ctx, controlServerNamespacedName, cs)
-			if err == nil {
-				cs.Finalizers = nil
-				_ = k8sClient.Update(ctx, cs)
-				_ = k8sClient.Delete(ctx, cs)
-			}
-
-			secret := &corev1.Secret{}
-			err = k8sClient.Get(ctx, secretNamespacedName, secret)
-			if err == nil {
-				_ = k8sClient.Delete(ctx, secret)
-			}
 		})
 
 		It("should set Error status when API call fails", func() {
-			By("Creating the admin secret")
-			secret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      adminSecretName,
-					Namespace: "default",
-				},
-				Data: map[string][]byte{
-					"systemAdminKey": []byte("test-admin-key"),
-				},
-			}
-			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
-
-			By("Creating a ready ControlServer")
-			controlServer := &kodiakv1alpha1.ControlServer{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      controlServerName,
-					Namespace: "default",
-					Annotations: map[string]string{
-						"kodiak.mnicloud.jp/system-admin-key-secret": adminSecretName,
-					},
-				},
-				Spec: kodiakv1alpha1.ControlServerSpec{
-					Image: "ghcr.io/jsiebens/ionscale:latest",
-					Config: kodiakv1alpha1.ControlServerConfig{
-						TLS: &kodiakv1alpha1.TLSConfig{
-							Disable: true,
-						},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, controlServer)).To(Succeed())
-
-			controlServer.Status.Ready = true
-			controlServer.Status.Endpoint = "http://test.example.com:8080"
-			controlServer.Status.Phase = "Ready"
-			Expect(k8sClient.Status().Update(ctx, controlServer)).To(Succeed())
-
 			By("Creating a Tailnet")
 			tailnet := &kodiakv1alpha1.Tailnet{
 				ObjectMeta: metav1.ObjectMeta{
@@ -525,9 +269,6 @@ var _ = Describe("Tailnet Controller", func() {
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
 					Name: "test-tailnet",
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: controlServerName,
-					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, tailnet)).To(Succeed())
@@ -541,9 +282,11 @@ var _ = Describe("Tailnet Controller", func() {
 
 			By("Reconciling the Tailnet")
 			reconciler := &TailnetReconciler{
-				Client:        k8sClient,
-				Scheme:        k8sClient.Scheme(),
-				ClientFactory: controlclient.NewMockClientFactory(mockClient),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				ClientFactory:    controlclient.NewMockClientFactory(mockClient),
+				IonscaleEndpoint: "http://ionscale.test.svc:8080",
+				IonscaleAdminKey: "test-admin-key",
 			}
 
 			// First reconcile adds finalizer
@@ -568,11 +311,7 @@ var _ = Describe("Tailnet Controller", func() {
 	})
 
 	Context("When deleting a Tailnet", func() {
-		const (
-			tailnetName       = "test-tailnet-delete"
-			controlServerName = "test-cs-delete"
-			adminSecretName   = "test-admin-secret-delete"
-		)
+		const tailnetName = "test-tailnet-delete"
 
 		ctx := context.Background()
 
@@ -581,70 +320,11 @@ var _ = Describe("Tailnet Controller", func() {
 			Namespace: "default",
 		}
 
-		controlServerNamespacedName := types.NamespacedName{
-			Name:      controlServerName,
-			Namespace: "default",
-		}
-
-		secretNamespacedName := types.NamespacedName{
-			Name:      adminSecretName,
-			Namespace: "default",
-		}
-
 		AfterEach(func() {
-			cs := &kodiakv1alpha1.ControlServer{}
-			err := k8sClient.Get(ctx, controlServerNamespacedName, cs)
-			if err == nil {
-				cs.Finalizers = nil
-				_ = k8sClient.Update(ctx, cs)
-				_ = k8sClient.Delete(ctx, cs)
-			}
-
-			secret := &corev1.Secret{}
-			err = k8sClient.Get(ctx, secretNamespacedName, secret)
-			if err == nil {
-				_ = k8sClient.Delete(ctx, secret)
-			}
+			// Nothing to clean up - the test deletes the Tailnet
 		})
 
 		It("should delete remote tailnet and remove finalizer", func() {
-			By("Creating the admin secret")
-			secret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      adminSecretName,
-					Namespace: "default",
-				},
-				Data: map[string][]byte{
-					"systemAdminKey": []byte("test-admin-key"),
-				},
-			}
-			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
-
-			By("Creating a ready ControlServer")
-			controlServer := &kodiakv1alpha1.ControlServer{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      controlServerName,
-					Namespace: "default",
-					Annotations: map[string]string{
-						"kodiak.mnicloud.jp/system-admin-key-secret": adminSecretName,
-					},
-				},
-				Spec: kodiakv1alpha1.ControlServerSpec{
-					Image: "ghcr.io/jsiebens/ionscale:latest",
-					Config: kodiakv1alpha1.ControlServerConfig{
-						TLS: &kodiakv1alpha1.TLSConfig{
-							Disable: true,
-						},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, controlServer)).To(Succeed())
-
-			controlServer.Status.Ready = true
-			controlServer.Status.Endpoint = "http://test.example.com:8080"
-			controlServer.Status.Phase = "Ready"
-			Expect(k8sClient.Status().Update(ctx, controlServer)).To(Succeed())
-
 			By("Creating a Tailnet")
 			tailnet := &kodiakv1alpha1.Tailnet{
 				ObjectMeta: metav1.ObjectMeta{
@@ -653,9 +333,6 @@ var _ = Describe("Tailnet Controller", func() {
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
 					Name: "test-tailnet",
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: controlServerName,
-					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, tailnet)).To(Succeed())
@@ -678,9 +355,11 @@ var _ = Describe("Tailnet Controller", func() {
 
 			By("Reconciling the Tailnet to create it")
 			reconciler := &TailnetReconciler{
-				Client:        k8sClient,
-				Scheme:        k8sClient.Scheme(),
-				ClientFactory: controlclient.NewMockClientFactory(mockClient),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				ClientFactory:    controlclient.NewMockClientFactory(mockClient),
+				IonscaleEndpoint: "http://ionscale.test.svc:8080",
+				IonscaleAdminKey: "test-admin-key",
 			}
 
 			// Reconcile to create

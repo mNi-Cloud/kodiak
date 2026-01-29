@@ -6,10 +6,6 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: tailnet-sample
 spec:
-  # ControlServer that manages this tailnet
-  controlServerRef:
-    name: controlserver-sample
-
   # Tailnet name (as seen in ionscale)
   name: "my-tailnet"
 

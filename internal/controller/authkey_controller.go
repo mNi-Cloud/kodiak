@@ -67,8 +67,11 @@ const (
 // AuthKeyReconciler reconciles a AuthKey object
 type AuthKeyReconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
-	ClientFactory controlclient.ClientFactory
+	Scheme           *runtime.Scheme
+	ClientFactory    controlclient.ClientFactory
+	IonscaleEndpoint string
+	IonscaleAdminKey string
+	IonscaleSkipTLS  bool
 }
 
 // +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=authkeys,verbs=get;list;watch;create;update;patch;delete
@@ -125,57 +128,22 @@ func (r *AuthKeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
 	}
 
-	if tailnet.Spec.ControlServerRef.Name == "" {
-		logger.Info("tailnet missing control server reference", "tailnet", tailnet.Name)
-		if err := r.setPendingStatus(ctx, &authKey, reasonControlServerNotFound,
-			fmt.Sprintf("tailnet %q does not reference a control server", tailnet.Name)); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
-	}
-
-	controlServer := &kodiakv1alpha1.ControlServer{}
-	if err := r.Get(ctx, types.NamespacedName{Name: tailnet.Spec.ControlServerRef.Name, Namespace: authKey.Namespace}, controlServer); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("control server not found", "controlServer", tailnet.Spec.ControlServerRef.Name)
-			if err := r.setPendingStatus(ctx, &authKey, reasonControlServerNotFound,
-				fmt.Sprintf("control server %q not found", tailnet.Spec.ControlServerRef.Name)); err != nil {
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
-		}
-		return ctrl.Result{}, fmt.Errorf("unable to fetch control server %s: %w", tailnet.Spec.ControlServerRef.Name, err)
-	}
-
-	adminKey, secretName, err := readAdminKey(ctx, r.Client, controlServer)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("system admin secret not found", "secret", secretName)
-			if err := r.setPendingStatus(ctx, &authKey, reasonMissingAdminToken,
-				fmt.Sprintf("admin key secret %q not found", secretName)); err != nil {
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
-		}
-		return ctrl.Result{}, fmt.Errorf("unable to read admin token: %w", err)
-	}
-	if adminKey == "" {
-		logger.Info("admin token is empty", "secret", secretName)
+	if r.IonscaleEndpoint == "" || r.IonscaleAdminKey == "" {
+		logger.Error(nil, "ionscale configuration not provided")
 		if err := r.setPendingStatus(ctx, &authKey, reasonMissingAdminToken,
-			fmt.Sprintf("admin key secret %q does not contain a value", secretName)); err != nil {
+			"ionscale endpoint or admin key not configured"); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
 	}
 
-	endpoint, skipVerify := deriveControlServerEndpoint(controlServer)
 	clientFactory := r.ClientFactory
 	if clientFactory == nil {
 		clientFactory = controlclient.DefaultClientFactory()
 	}
-	ctrlClient, err := clientFactory(endpoint, adminKey, skipVerify)
+	ctrlClient, err := clientFactory(r.IonscaleEndpoint, r.IonscaleAdminKey, r.IonscaleSkipTLS)
 	if err != nil {
-		logger.Error(err, "failed to create control server client", "endpoint", endpoint)
+		logger.Error(err, "failed to create control server client", "endpoint", r.IonscaleEndpoint)
 		if err := r.setErrorStatus(ctx, &authKey, reasonAuthKeyError, fmt.Errorf("unable to construct control server client: %w", err)); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -268,27 +236,16 @@ func (r *AuthKeyReconciler) handleDeletion(ctx context.Context, resource *kodiak
 
 	logger := log.FromContext(ctx).WithValues("authkey", resource.Name)
 
-	if resource.Status.KeyID != 0 && resource.Spec.TailnetRef.Name != "" {
-		tailnet := &kodiakv1alpha1.Tailnet{}
-		err := r.Get(ctx, types.NamespacedName{Name: resource.Spec.TailnetRef.Name, Namespace: resource.Namespace}, tailnet)
-		if err == nil && tailnet.Spec.ControlServerRef.Name != "" {
-			controlServer := &kodiakv1alpha1.ControlServer{}
-			if err := r.Get(ctx, types.NamespacedName{Name: tailnet.Spec.ControlServerRef.Name, Namespace: resource.Namespace}, controlServer); err == nil {
-				adminKey, _, tokenErr := readAdminKey(ctx, r.Client, controlServer)
-				if tokenErr == nil && adminKey != "" {
-					endpoint, skipVerify := deriveControlServerEndpoint(controlServer)
-					clientFactory := r.ClientFactory
-					if clientFactory == nil {
-						clientFactory = controlclient.DefaultClientFactory()
-					}
-					ctrlClient, clientErr := clientFactory(endpoint, adminKey, skipVerify)
-					if clientErr == nil {
-						if err := ctrlClient.DeleteAuthKey(ctx, resource.Status.KeyID); err != nil && !isConnectNotFound(err) {
-							logger.Error(err, "failed to delete auth key on control server")
-							return ctrl.Result{RequeueAfter: rotationRetryRequeue}, nil
-						}
-					}
-				}
+	if resource.Status.KeyID != 0 && r.IonscaleEndpoint != "" && r.IonscaleAdminKey != "" {
+		clientFactory := r.ClientFactory
+		if clientFactory == nil {
+			clientFactory = controlclient.DefaultClientFactory()
+		}
+		ctrlClient, clientErr := clientFactory(r.IonscaleEndpoint, r.IonscaleAdminKey, r.IonscaleSkipTLS)
+		if clientErr == nil {
+			if err := ctrlClient.DeleteAuthKey(ctx, resource.Status.KeyID); err != nil && !isConnectNotFound(err) {
+				logger.Error(err, "failed to delete auth key on control server")
+				return ctrl.Result{RequeueAfter: rotationRetryRequeue}, nil
 			}
 		}
 	}

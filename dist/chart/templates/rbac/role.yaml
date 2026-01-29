@@ -1,0 +1,88 @@
+{{- if .Values.rbac.enable }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kodiak.fullname" . }}-manager-role
+  labels:
+    {{- include "kodiak.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - get
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods/exec
+  verbs:
+  - create
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kodiak.mnicloud.jp
+  resources:
+  - authkeys
+  - connectors
+  - tailnets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kodiak.mnicloud.jp
+  resources:
+  - authkeys/finalizers
+  - connectors/finalizers
+  - tailnets/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - kodiak.mnicloud.jp
+  resources:
+  - authkeys/status
+  - connectors/status
+  - tailnets/status
+  verbs:
+  - get
+  - patch
+  - update
+{{- end }}

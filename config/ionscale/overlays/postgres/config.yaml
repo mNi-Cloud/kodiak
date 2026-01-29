@@ -1,0 +1,24 @@
+# ionscale configuration - PostgreSQL backend
+# Recommended for production deployments
+
+listen_addr: ":8080"
+metrics_listen_addr: ":9091"
+stun_listen_addr: ":3478"
+
+# Server URL - adjust if using Ingress or LoadBalancer
+server_url: "http://ionscale.kodiak-system.svc.cluster.local:8080"
+
+# PostgreSQL database
+# Update the connection string for your environment
+database:
+  type: postgres
+  url: postgres://ionscale:changeme@postgres.kodiak-system.svc:5432/ionscale?sslmode=disable
+
+# TLS disabled for in-cluster communication
+# Enable TLS for production with Ingress
+tls:
+  disable: true
+
+# Logging
+logging:
+  level: info

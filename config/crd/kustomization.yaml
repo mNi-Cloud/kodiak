@@ -3,7 +3,6 @@
 # It should be run by config/default
 resources:
 - bases/kodiak.mnicloud.jp_connectors.yaml
-- bases/kodiak.mnicloud.jp_controlservers.yaml
 - bases/kodiak.mnicloud.jp_tailnets.yaml
 - bases/kodiak.mnicloud.jp_authkeys.yaml
 # +kubebuilder:scaffold:crdkustomizeresource

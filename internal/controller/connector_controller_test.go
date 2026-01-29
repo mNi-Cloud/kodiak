@@ -70,15 +70,6 @@ var _ = Describe("Connector Controller", func() {
 				_ = k8sClient.Delete(ctx, deploy)
 			}
 
-			// Clean up ControlServer
-			cs := &kodiakv1alpha1.ControlServer{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: "test-controlserver", Namespace: "default"}, cs)
-			if err == nil {
-				cs.Finalizers = nil
-				_ = k8sClient.Update(ctx, cs)
-				_ = k8sClient.Delete(ctx, cs)
-			}
-
 			// Clean up Secrets
 			for _, secretName := range []string{"test-auth-secret"} {
 				secret := &corev1.Secret{}
@@ -109,8 +100,10 @@ var _ = Describe("Connector Controller", func() {
 
 			By("Reconciling the resource")
 			reconciler := &ConnectorReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				IonscaleEndpoint: "http://ionscale.test.svc:8080",
+				IonscaleAdminKey: "test-admin-key",
 			}
 
 			result, err := reconciler.Reconcile(ctx, reconcile.Request{
@@ -162,8 +155,10 @@ var _ = Describe("Connector Controller", func() {
 
 			By("Reconciling the resource")
 			reconciler := &ConnectorReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				IonscaleEndpoint: "http://ionscale.test.svc:8080",
+				IonscaleAdminKey: "test-admin-key",
 			}
 
 			// Multiple reconciles to add finalizer and create deployment
@@ -219,8 +214,10 @@ var _ = Describe("Connector Controller", func() {
 
 			By("Reconciling the resource")
 			reconciler := &ConnectorReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				IonscaleEndpoint: "http://ionscale.test.svc:8080",
+				IonscaleAdminKey: "test-admin-key",
 			}
 
 			// Multiple reconciles
@@ -273,8 +270,10 @@ var _ = Describe("Connector Controller", func() {
 
 			By("Reconciling the resource")
 			reconciler := &ConnectorReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				IonscaleEndpoint: "http://ionscale.test.svc:8080",
+				IonscaleAdminKey: "test-admin-key",
 			}
 
 			// Multiple reconciles
@@ -306,31 +305,8 @@ var _ = Describe("Connector Controller", func() {
 			Expect(routesEnv.Value).To(Equal("10.0.0.0/8,192.168.0.0/16"))
 		})
 
-		It("should use login server from ready ControlServer", func() {
-			By("Creating a ControlServer that is ready")
-			cs := &kodiakv1alpha1.ControlServer{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-controlserver",
-					Namespace: "default",
-				},
-				Spec: kodiakv1alpha1.ControlServerSpec{
-					Image: "ghcr.io/jsiebens/ionscale:latest",
-					Config: kodiakv1alpha1.ControlServerConfig{
-						TLS: &kodiakv1alpha1.TLSConfig{
-							Disable: true,
-						},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, cs)).To(Succeed())
-
-			// Update ControlServer status to Ready
-			cs.Status.Phase = "Ready"
-			cs.Status.Endpoint = "http://test-controlserver-service.default.svc:8080"
-			cs.Status.Ready = true
-			Expect(k8sClient.Status().Update(ctx, cs)).To(Succeed())
-
-			By("Creating a Connector referencing the ControlServer")
+		It("should use controller's ionscale endpoint when controlServerUrl is not specified", func() {
+			By("Creating a Connector without controlServerUrl")
 			connector := &kodiakv1alpha1.Connector{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      connectorName,
@@ -340,9 +316,7 @@ var _ = Describe("Connector Controller", func() {
 					Spec: kodiakv1alpha1.ConnectorSpecSpec{
 						Tailscale: kodiakv1alpha1.TailscaleConfig{
 							AuthKey: "test-key",
-							ControlServerRef: &corev1.LocalObjectReference{
-								Name: "test-controlserver",
-							},
+							// No ControlServerUrl specified - should use controller's default
 						},
 					},
 				},
@@ -351,8 +325,10 @@ var _ = Describe("Connector Controller", func() {
 
 			By("Reconciling the resource")
 			reconciler := &ConnectorReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				IonscaleEndpoint: "http://ionscale.kodiak-system.svc:8080",
+				IonscaleAdminKey: "test-admin-key",
 			}
 
 			// Multiple reconciles
@@ -363,7 +339,7 @@ var _ = Describe("Connector Controller", func() {
 				Expect(err).NotTo(HaveOccurred())
 			}
 
-			By("Checking that Deployment was created with login server from ControlServer")
+			By("Checking that Deployment was created with login server from controller's ionscale endpoint")
 			deploy := &appsv1.Deployment{}
 			Eventually(func() error {
 				return k8sClient.Get(ctx, types.NamespacedName{
@@ -381,7 +357,7 @@ var _ = Describe("Connector Controller", func() {
 				}
 			}
 			Expect(extraArgsEnv).NotTo(BeNil())
-			Expect(extraArgsEnv.Value).To(ContainSubstring("--login-server=http://test-controlserver-service.default.svc:8080"))
+			Expect(extraArgsEnv.Value).To(ContainSubstring("--login-server=http://ionscale.kodiak-system.svc:8080"))
 		})
 	})
 })

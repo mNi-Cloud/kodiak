@@ -50,26 +50,6 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /mutate-kodiak-mnicloud-jp-v1alpha1-controlserver
-  failurePolicy: Fail
-  name: mcontrolserver-v1alpha1.kb.io
-  rules:
-  - apiGroups:
-    - kodiak.mnicloud.jp
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - controlservers
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: webhook-service
-      namespace: system
       path: /mutate-kodiak-mnicloud-jp-v1alpha1-tailnet
   failurePolicy: Fail
   name: mtailnet-v1alpha1.kb.io
@@ -129,26 +109,6 @@ webhooks:
     - UPDATE
     resources:
     - connectors
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: webhook-service
-      namespace: system
-      path: /validate-kodiak-mnicloud-jp-v1alpha1-controlserver
-  failurePolicy: Fail
-  name: vcontrolserver-v1alpha1.kb.io
-  rules:
-  - apiGroups:
-    - kodiak.mnicloud.jp
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - controlservers
   sideEffects: None
 - admissionReviewVersions:
   - v1

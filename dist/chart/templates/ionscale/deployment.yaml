@@ -1,0 +1,73 @@
+{{- if .Values.ionscale.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ionscale
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kodiak.ionscale.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.ionscale.replicas }}
+  selector:
+    matchLabels:
+      {{- include "kodiak.ionscale.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kodiak.ionscale.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: ionscale
+          image: {{ .Values.ionscale.image.repository }}:{{ .Values.ionscale.image.tag }}
+          args:
+            - server
+            - --config
+            - /etc/ionscale/config.yaml
+          ports:
+            - name: api
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9091
+              protocol: TCP
+            - name: stun
+              containerPort: 3478
+              protocol: UDP
+          env:
+            - name: IONSCALE_SYSTEM_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kodiak.fullname" . }}-ionscale-admin
+                  key: systemAdminKey
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ionscale
+              readOnly: true
+            {{- if and (eq .Values.ionscale.database.type "sqlite") .Values.ionscale.persistence.enabled }}
+            - name: data
+              mountPath: /var/lib/ionscale
+            {{- end }}
+          resources:
+            {{- toYaml .Values.ionscale.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "kodiak.fullname" . }}-ionscale-config
+        {{- if and (eq .Values.ionscale.database.type "sqlite") .Values.ionscale.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "kodiak.fullname" . }}-ionscale-data
+        {{- end }}
+{{- end }}

@@ -23,10 +23,6 @@ spec:
       jsonPath: .status.tailnetId
       name: ID
       type: integer
-    - description: Control server reference
-      jsonPath: .spec.controlServerRef.name
-      name: CONTROL-SERVER
-      type: string
     - description: Number of machines
       jsonPath: .status.machineCount
       name: MACHINES
@@ -67,21 +63,6 @@ spec:
                 description: ACLPolicy defines access control list policy (HuJSON
                   format)
                 type: string
-              controlServerRef:
-                description: ControlServerRef references the ControlServer managing
-                  this tailnet
-                properties:
-                  name:
-                    default: ""
-                    description: |-
-                      Name of the referent.
-                      This field is effectively required, but due to backwards compatibility is
-                      allowed to be empty. Instances of this type with an empty value here are
-                      almost certainly wrong.
-                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                    type: string
-                type: object
-                x-kubernetes-map-type: atomic
               dnsConfig:
                 description: DNSConfig for the tailnet
                 properties:
@@ -128,7 +109,6 @@ spec:
                 description: SSHEnabled enables SSH access
                 type: boolean
             required:
-            - controlServerRef
             - name
             type: object
           status:

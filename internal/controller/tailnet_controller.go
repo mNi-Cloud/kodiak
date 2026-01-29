@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/bufbuild/connect-go"
@@ -31,7 +30,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -42,16 +40,12 @@ import (
 
 const (
 	tailnetConditionReady           = "Ready"
-	reasonMissingControlServer      = "MissingControlServerRef"
-	reasonControlServerNotFound     = "ControlServerNotFound"
-	reasonControlServerNotReady     = "ControlServerNotReady"
-	reasonMissingAdminKey           = "MissingAdminKeySecret"
+	reasonConfigurationMissing      = "ConfigurationMissing"
 	reasonTailnetCreated            = "TailnetCreated"
 	reasonTailnetUpdated            = "TailnetUpdated"
 	reasonTailnetSynced             = "TailnetSynced"
 	reasonTailnetError              = "TailnetError"
 	defaultTailnetRequeue           = time.Minute
-	controlServerNotReadyRequeue    = 15 * time.Second
 	missingDependencyRequeue        = 30 * time.Second
 	machineListFailureRequeue       = time.Minute
 	finalizerCleanupRetryRequeue    = 10 * time.Second
@@ -61,8 +55,11 @@ const (
 // TailnetReconciler reconciles a Tailnet object
 type TailnetReconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
-	ClientFactory controlclient.ClientFactory
+	Scheme           *runtime.Scheme
+	ClientFactory    controlclient.ClientFactory
+	IonscaleEndpoint string
+	IonscaleAdminKey string
+	IonscaleSkipTLS  bool
 }
 
 // +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets,verbs=get;list;watch;create;update;patch;delete
@@ -88,65 +85,22 @@ func (r *TailnetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return result, err
 	}
 
-	if tailnet.Spec.ControlServerRef.Name == "" {
-		logger.Info("control server reference not specified on tailnet")
-		if err := r.setPendingStatus(ctx, &tailnet, reasonMissingControlServer, "spec.controlServerRef.name must be provided"); err != nil {
+	if r.IonscaleEndpoint == "" || r.IonscaleAdminKey == "" {
+		logger.Error(nil, "ionscale configuration not provided")
+		if err := r.setPendingStatus(ctx, &tailnet, reasonConfigurationMissing,
+			"ionscale endpoint or admin key not configured"); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: missingDependencyRequeue}, nil
 	}
 
-	controlServer := &kodiakv1alpha1.ControlServer{}
-	if err := r.Get(ctx, types.NamespacedName{Name: tailnet.Spec.ControlServerRef.Name, Namespace: tailnet.Namespace}, controlServer); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("referenced control server not found", "controlServer", tailnet.Spec.ControlServerRef.Name)
-			if err := r.setPendingStatus(ctx, &tailnet, reasonControlServerNotFound,
-				fmt.Sprintf("control server %q not found", tailnet.Spec.ControlServerRef.Name)); err != nil {
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{RequeueAfter: missingDependencyRequeue}, nil
-		}
-		return ctrl.Result{}, fmt.Errorf("unable to fetch control server %s: %w", tailnet.Spec.ControlServerRef.Name, err)
-	}
-
-	if !controlServer.Status.Ready {
-		logger.Info("control server not ready yet", "controlServer", controlServer.Name)
-		if err := r.setPendingStatus(ctx, &tailnet, reasonControlServerNotReady,
-			fmt.Sprintf("control server %q is not ready", controlServer.Name)); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: controlServerNotReadyRequeue}, nil
-	}
-
-	adminKey, secretName, err := readAdminKey(ctx, r.Client, controlServer)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("system admin secret not found", "secret", secretName)
-			if err := r.setPendingStatus(ctx, &tailnet, reasonMissingAdminKey,
-				fmt.Sprintf("admin key secret %q not found", secretName)); err != nil {
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{RequeueAfter: missingDependencyRequeue}, nil
-		}
-		return ctrl.Result{}, fmt.Errorf("unable to read admin token: %w", err)
-	}
-	if adminKey == "" {
-		logger.Info("admin key secret empty", "secret", secretName)
-		if err := r.setPendingStatus(ctx, &tailnet, reasonMissingAdminKey,
-			fmt.Sprintf("admin key secret %q does not contain a value", secretName)); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: missingDependencyRequeue}, nil
-	}
-
-	endpoint, skipVerify := deriveControlServerEndpoint(controlServer)
 	clientFactory := r.ClientFactory
 	if clientFactory == nil {
 		clientFactory = controlclient.DefaultClientFactory()
 	}
-	ctrlClient, err := clientFactory(endpoint, adminKey, skipVerify)
+	ctrlClient, err := clientFactory(r.IonscaleEndpoint, r.IonscaleAdminKey, r.IonscaleSkipTLS)
 	if err != nil {
-		logger.Error(err, "failed to create control server client", "endpoint", endpoint, "skipVerify", skipVerify)
+		logger.Error(err, "failed to create control server client", "endpoint", r.IonscaleEndpoint, "skipVerify", r.IonscaleSkipTLS)
 		if err := r.setErrorStatus(ctx, &tailnet, reasonTailnetError, fmt.Errorf("unable to construct control server client: %w", err)); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -202,18 +156,10 @@ func (r *TailnetReconciler) handleDeletion(ctx context.Context, resource *kodiak
 
 	logger := log.FromContext(ctx).WithValues("tailnet", resource.Name)
 
-	if resource.Status.TailnetID != 0 && resource.Spec.ControlServerRef.Name != "" {
-		controlServer := &kodiakv1alpha1.ControlServer{}
-		err := r.Get(ctx, types.NamespacedName{Name: resource.Spec.ControlServerRef.Name, Namespace: resource.Namespace}, controlServer)
-		if err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("unable to fetch control server during finalization: %w", err)
-		}
-
-		if err == nil {
-			if err := r.deleteRemoteTailnet(ctx, controlServer, resource.Status.TailnetID); err != nil {
-				logger.Error(err, "failed to delete tailnet from control server, will retry")
-				return ctrl.Result{RequeueAfter: finalizerCleanupRetryRequeue}, nil
-			}
+	if resource.Status.TailnetID != 0 && r.IonscaleEndpoint != "" && r.IonscaleAdminKey != "" {
+		if err := r.deleteRemoteTailnet(ctx, resource.Status.TailnetID); err != nil {
+			logger.Error(err, "failed to delete tailnet from control server, will retry")
+			return ctrl.Result{RequeueAfter: finalizerCleanupRetryRequeue}, nil
 		}
 	}
 
@@ -224,21 +170,12 @@ func (r *TailnetReconciler) handleDeletion(ctx context.Context, resource *kodiak
 	return ctrl.Result{}, nil
 }
 
-func (r *TailnetReconciler) deleteRemoteTailnet(ctx context.Context, controlServer *kodiakv1alpha1.ControlServer, tailnetID uint64) error {
-	adminKey, _, err := readAdminKey(ctx, r.Client, controlServer)
-	if err != nil {
-		return fmt.Errorf("unable to read admin token for deletion: %w", err)
-	}
-	if adminKey == "" {
-		return errors.New("admin key is empty, cannot delete remote tailnet")
-	}
-
-	endpoint, skipVerify := deriveControlServerEndpoint(controlServer)
+func (r *TailnetReconciler) deleteRemoteTailnet(ctx context.Context, tailnetID uint64) error {
 	clientFactory := r.ClientFactory
 	if clientFactory == nil {
 		clientFactory = controlclient.DefaultClientFactory()
 	}
-	ctrlClient, err := clientFactory(endpoint, adminKey, skipVerify)
+	ctrlClient, err := clientFactory(r.IonscaleEndpoint, r.IonscaleAdminKey, r.IonscaleSkipTLS)
 	if err != nil {
 		return fmt.Errorf("failed to create control server client for deletion: %w", err)
 	}
@@ -492,32 +429,6 @@ func stringSlicesEqual(a, b []string) bool {
 	return true
 }
 
-func deriveControlServerEndpoint(controlServer *kodiakv1alpha1.ControlServer) (string, bool) {
-	ports := extractPortConfiguration(controlServer)
-	endpoint := controlServer.Status.Endpoint
-	if endpoint == "" {
-		endpoint = controlServerEndpoint(controlServer, ports)
-	}
-
-	disableTLS := controlServer.Spec.Config.TLS != nil && controlServer.Spec.Config.TLS.Disable
-	skipVerify := false
-
-	if disableTLS {
-		return endpoint, false
-	}
-
-	if strings.HasPrefix(endpoint, "https://") {
-		host := endpoint[len("https://"):]
-		if idx := strings.Index(host, "/"); idx >= 0 {
-			host = host[:idx]
-		}
-		if strings.Contains(host, ".svc.") || strings.Contains(host, ".cluster.local") {
-			skipVerify = true
-		}
-	}
-
-	return endpoint, skipVerify
-}
 
 func isConnectNotFound(err error) bool {
 	if err == nil {

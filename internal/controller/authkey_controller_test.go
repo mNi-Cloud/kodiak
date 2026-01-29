@@ -71,17 +71,8 @@ var _ = Describe("AuthKey Controller", func() {
 				_ = k8sClient.Delete(ctx, tailnet)
 			}
 
-			// Clean up ControlServer
-			cs := &kodiakv1alpha1.ControlServer{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: "test-controlserver", Namespace: "default"}, cs)
-			if err == nil {
-				cs.Finalizers = nil
-				_ = k8sClient.Update(ctx, cs)
-				_ = k8sClient.Delete(ctx, cs)
-			}
-
 			// Clean up Secrets
-			for _, secretName := range []string{"test-controlserver-admin-key", "authkey-" + authKeyName} {
+			for _, secretName := range []string{"authkey-" + authKeyName} {
 				secret := &corev1.Secret{}
 				err = k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: "default"}, secret)
 				if err == nil {
@@ -107,8 +98,10 @@ var _ = Describe("AuthKey Controller", func() {
 
 			By("Reconciling the resource")
 			reconciler := &AuthKeyReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				IonscaleEndpoint: "http://ionscale.test.svc:8080",
+				IonscaleAdminKey: "test-admin-key",
 			}
 
 			result, err := reconciler.Reconcile(ctx, reconcile.Request{
@@ -140,8 +133,10 @@ var _ = Describe("AuthKey Controller", func() {
 
 			By("Reconciling the resource")
 			reconciler := &AuthKeyReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				IonscaleEndpoint: "http://ionscale.test.svc:8080",
+				IonscaleAdminKey: "test-admin-key",
 			}
 
 			// First reconcile adds finalizer
@@ -176,9 +171,6 @@ var _ = Describe("AuthKey Controller", func() {
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
 					Name: "test-tailnet",
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: "test-controlserver",
-					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, tailnet)).To(Succeed())
@@ -200,8 +192,10 @@ var _ = Describe("AuthKey Controller", func() {
 
 			By("Reconciling the resource")
 			reconciler := &AuthKeyReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				IonscaleEndpoint: "http://ionscale.test.svc:8080",
+				IonscaleAdminKey: "test-admin-key",
 			}
 
 			// First reconcile adds finalizer
@@ -226,29 +220,7 @@ var _ = Describe("AuthKey Controller", func() {
 			Expect(updated.Status.Conditions[0].Reason).To(Equal(reasonTailnetNotReady))
 		})
 
-		It("should set Pending status when admin key secret is missing", func() {
-			By("Creating a ControlServer without admin key secret")
-			cs := &kodiakv1alpha1.ControlServer{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-controlserver",
-					Namespace: "default",
-				},
-				Spec: kodiakv1alpha1.ControlServerSpec{
-					Image: "ghcr.io/jsiebens/ionscale:latest",
-					Config: kodiakv1alpha1.ControlServerConfig{
-						TLS: &kodiakv1alpha1.TLSConfig{
-							Disable: true,
-						},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, cs)).To(Succeed())
-
-			cs.Status.Phase = "Ready"
-			cs.Status.Endpoint = "http://test-controlserver-service.default.svc:8080"
-			cs.Status.Ready = true
-			Expect(k8sClient.Status().Update(ctx, cs)).To(Succeed())
-
+		It("should set Pending status when ionscale configuration is missing", func() {
 			By("Creating a Tailnet")
 			tailnet := &kodiakv1alpha1.Tailnet{
 				ObjectMeta: metav1.ObjectMeta{
@@ -257,9 +229,6 @@ var _ = Describe("AuthKey Controller", func() {
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
 					Name: "test-tailnet",
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: "test-controlserver",
-					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, tailnet)).To(Succeed())
@@ -283,10 +252,12 @@ var _ = Describe("AuthKey Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, authKey)).To(Succeed())
 
-			By("Reconciling the resource")
+			By("Reconciling the resource without ionscale configuration")
 			reconciler := &AuthKeyReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:           k8sClient,
+				Scheme:           k8sClient.Scheme(),
+				IonscaleEndpoint: "", // Missing configuration
+				IonscaleAdminKey: "", // Missing configuration
 			}
 
 			// Multiple reconciles
@@ -297,7 +268,7 @@ var _ = Describe("AuthKey Controller", func() {
 				Expect(err).NotTo(HaveOccurred())
 			}
 
-			By("Checking the status is Pending due to missing admin key")
+			By("Checking the status is Pending due to missing ionscale config")
 			updated := &kodiakv1alpha1.AuthKey{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
 			Expect(updated.Status.Phase).To(Equal("Pending"))

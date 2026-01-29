@@ -66,6 +66,9 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var ionscaleEndpoint string
+	var ionscaleAdminKey string
+	var ionscaleSkipTLS bool
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -84,11 +87,22 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&ionscaleEndpoint, "ionscale-endpoint", "",
+		"ionscale control server endpoint (e.g., http://ionscale.kodiak-system.svc.cluster.local:8080)")
+	flag.StringVar(&ionscaleAdminKey, "ionscale-admin-key", "",
+		"ionscale system admin key (or use IONSCALE_ADMIN_KEY env var)")
+	flag.BoolVar(&ionscaleSkipTLS, "ionscale-skip-tls-verify", false,
+		"skip TLS certificate verification for ionscale")
 	opts := zap.Options{
 		Development: true,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	// Read ionscale admin key from environment variable if not provided via flag
+	if ionscaleAdminKey == "" {
+		ionscaleAdminKey = os.Getenv("IONSCALE_ADMIN_KEY")
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -214,41 +228,36 @@ func main() {
 	}
 
 	if err = (&controller.ConnectorReconciler{
-		Client:     mgr.GetClient(),
-		Scheme:     mgr.GetScheme(),
-		RESTClient: clientset.CoreV1().RESTClient(),
-		Config:     config,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		RESTClient:       clientset.CoreV1().RESTClient(),
+		Config:           config,
+		IonscaleEndpoint: ionscaleEndpoint,
+		IonscaleAdminKey: ionscaleAdminKey,
+		IonscaleSkipTLS:  ionscaleSkipTLS,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Connector")
 		os.Exit(1)
 	}
-	if err := (&controller.ControlServerReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ControlServer")
-		os.Exit(1)
-	}
 	if err := (&controller.TailnetReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		IonscaleEndpoint: ionscaleEndpoint,
+		IonscaleAdminKey: ionscaleAdminKey,
+		IonscaleSkipTLS:  ionscaleSkipTLS,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Tailnet")
 		os.Exit(1)
 	}
 	if err := (&controller.AuthKeyReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		IonscaleEndpoint: ionscaleEndpoint,
+		IonscaleAdminKey: ionscaleAdminKey,
+		IonscaleSkipTLS:  ionscaleSkipTLS,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AuthKey")
 		os.Exit(1)
-	}
-	// nolint:goconst
-	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err := webhookv1alpha1.SetupControlServerWebhookWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create webhook", "webhook", "ControlServer")
-			os.Exit(1)
-		}
 	}
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {

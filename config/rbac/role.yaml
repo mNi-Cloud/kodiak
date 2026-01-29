@@ -7,21 +7,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - configmaps
-  - persistentvolumeclaims
-  - secrets
-  - services
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - events
   verbs:
   - create
@@ -42,6 +27,19 @@ rules:
   verbs:
   - create
 - apiGroups:
+  - ""
+  resources:
+  - secrets
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - apps
   resources:
   - deployments
@@ -58,7 +56,6 @@ rules:
   resources:
   - authkeys
   - connectors
-  - controlservers
   - tailnets
   verbs:
   - create
@@ -73,7 +70,6 @@ rules:
   resources:
   - authkeys/finalizers
   - connectors/finalizers
-  - controlservers/finalizers
   - tailnets/finalizers
   verbs:
   - update
@@ -82,7 +78,6 @@ rules:
   resources:
   - authkeys/status
   - connectors/status
-  - controlservers/status
   - tailnets/status
   verbs:
   - get

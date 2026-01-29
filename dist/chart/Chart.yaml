@@ -1,0 +1,18 @@
+apiVersion: v2
+name: kodiak
+description: A Helm chart for Kodiak - Kubernetes operator for ionscale/Tailscale VPN management
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - kubernetes
+  - operator
+  - tailscale
+  - ionscale
+  - vpn
+home: https://github.com/mNi-Cloud/kodiak
+sources:
+  - https://github.com/mNi-Cloud/kodiak
+maintainers:
+  - name: mNi-Cloud
+    url: https://github.com/mNi-Cloud

@@ -28,31 +28,27 @@ spec:
       authKeyRef:
         name: authkey-sample
       # (The controller resolves status.secretRef and mounts TS_AUTH_KEY automatically)
-      
+
       # Optional: Tailscale image version (defaults to "stable")
       version: "stable"
-      
+
       # Optional: Control server URL
-      # Method 1: Manual URL
+      # By default, uses the ionscale endpoint configured in the Kodiak controller
+      # Only override this if you need to connect to a different control server
       # controlServerUrl: "https://controlserver.example.com"
-      
-      # Method 2: Using ControlServer resource (recommended)
-      # This will automatically use the endpoint from the referenced ControlServer resource
-      controlServerRef:
-        name: controlserver-sample
-      
+
       # Required: Networks to advertise (CIDR format)
-      advertiseRoutes: 
+      advertiseRoutes:
         - "10.244.0.0/24"   # Pod CIDR
         - "10.96.0.0/12"    # Service CIDR
-      
+
       # Optional: Enable USERSPACE networking mode (defaults to true)
       # This is the default mode and is specified in the requirements
       userspaceNetworking: true
-      
+
       # Optional: Hostname for the Tailscale node
       hostname: "k8s-connector"
-      
+
       # Optional: Accept DNS configuration from Tailscale network (defaults to false)
       acceptDns: false
     # Optional: Resource requirements for the Tailscale container

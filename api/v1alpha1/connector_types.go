@@ -115,12 +115,8 @@ type TailscaleConfig struct {
 	AcceptDNS bool `json:"acceptDns,omitempty"`
 
 	// +optional
-	// URL for custom Tailscale control server (mutually exclusive with ControlServerRef)
+	// URL for custom Tailscale control server. If not specified, uses the controller's default ionscale endpoint
 	ControlServerUrl string `json:"controlServerUrl,omitempty"`
-
-	// +optional
-	// ControlServerRef references a ControlServer resource to use
-	ControlServerRef *corev1.LocalObjectReference `json:"controlServerRef,omitempty"`
 }
 
 // ConnectorStatus defines the observed state of Connector.

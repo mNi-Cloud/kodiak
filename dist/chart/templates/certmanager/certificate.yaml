@@ -1,0 +1,17 @@
+{{- if and .Values.webhook.enable .Values.certmanager.enable }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "kodiak.fullname" . }}-serving-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kodiak.labels" . | nindent 4 }}
+spec:
+  dnsNames:
+  - {{ include "kodiak.fullname" . }}-webhook-service.{{ .Release.Namespace }}.svc
+  - {{ include "kodiak.fullname" . }}-webhook-service.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: {{ include "kodiak.fullname" . }}-selfsigned-issuer
+  secretName: {{ include "kodiak.fullname" . }}-webhook-server-cert
+{{- end }}

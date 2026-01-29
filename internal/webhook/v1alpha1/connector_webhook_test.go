@@ -342,9 +342,7 @@ var _ = Describe("Connector Webhook", func() {
 							AuthKeyRef: &corev1.LocalObjectReference{
 								Name: "my-authkey",
 							},
-							ControlServerRef: &corev1.LocalObjectReference{
-								Name: "my-controlserver",
-							},
+							ControlServerUrl: "https://controlserver.example.com",
 						},
 					},
 				},
@@ -352,33 +350,6 @@ var _ = Describe("Connector Webhook", func() {
 
 			_, err := validator.ValidateCreate(ctx, obj)
 			Expect(err).NotTo(HaveOccurred())
-		})
-
-		It("Should deny creation with both controlServerUrl and controlServerRef", func() {
-			obj := &kodiakv1alpha1.Connector{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-connector",
-					Namespace: "default",
-				},
-				Spec: kodiakv1alpha1.ConnectorSpec{
-					Spec: kodiakv1alpha1.ConnectorSpecSpec{
-						Tailscale: kodiakv1alpha1.TailscaleConfig{
-							AuthKeyRef: &corev1.LocalObjectReference{
-								Name: "my-authkey",
-							},
-							ControlServerUrl: "https://controlserver.example.com",
-							ControlServerRef: &corev1.LocalObjectReference{
-								Name: "my-controlserver",
-							},
-						},
-					},
-				},
-			}
-
-			_, err := validator.ValidateCreate(ctx, obj)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("controlServerUrl"))
-			Expect(err.Error()).To(ContainSubstring("controlServerRef"))
 		})
 
 		It("Should validate updates correctly", func() {
@@ -481,9 +452,7 @@ var _ = Describe("Connector Webhook", func() {
 							UserspaceNetworking: true,
 							Hostname:            "my-connector",
 							AcceptDNS:           true,
-							ControlServerRef: &corev1.LocalObjectReference{
-								Name: "my-controlserver",
-							},
+							ControlServerUrl:    "https://controlserver.example.com",
 						},
 						Resources: kodiakv1alpha1.ResourceRequirements{
 							Limits: kodiakv1alpha1.ResourceList{

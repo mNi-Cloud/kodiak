@@ -63,8 +63,19 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          - --ionscale-endpoint=http://ionscale.$(POD_NAMESPACE).svc.cluster.local:8080
         image: controller:latest
         name: manager
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: IONSCALE_ADMIN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ionscale-admin
+              key: systemAdminKey
         ports: []
         securityContext:
           allowPrivilegeEscalation: false

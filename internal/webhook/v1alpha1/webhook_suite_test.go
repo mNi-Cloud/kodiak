@@ -109,9 +109,6 @@ var _ = BeforeSuite(func() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
-	err = SetupControlServerWebhookWithManager(mgr)
-	Expect(err).NotTo(HaveOccurred())
-
 	err = SetupTailnetWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 

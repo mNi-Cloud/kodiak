@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# PostgreSQL overlay for ionscale
+# No PVC needed - data stored in external PostgreSQL
+
+namespace: kodiak-system
+
+resources:
+- ../../base
+
+configMapGenerator:
+- name: ionscale-config
+  files:
+  - config.yaml
+  options:
+    disableNameSuffixHash: true
+
+# To configure PostgreSQL connection via Secret instead of config file:
+# 1. Create a secret with the database URL
+# 2. Add a patch to inject DATABASE_URL environment variable

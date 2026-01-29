@@ -1,0 +1,18 @@
+{{- if and .Values.ionscale.enabled (eq .Values.ionscale.database.type "sqlite") .Values.ionscale.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kodiak.fullname" . }}-ionscale-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kodiak.ionscale.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.ionscale.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.ionscale.persistence.size }}
+  {{- if .Values.ionscale.persistence.storageClass }}
+  storageClassName: {{ .Values.ionscale.persistence.storageClass }}
+  {{- end }}
+{{- end }}

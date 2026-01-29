@@ -21,7 +21,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
@@ -49,9 +48,6 @@ var _ = Describe("Tailnet Webhook", func() {
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
 					Name: "my-tailnet",
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: "my-controlserver",
-					},
 				},
 			}
 
@@ -60,28 +56,10 @@ var _ = Describe("Tailnet Webhook", func() {
 
 			// Verify no modifications were made
 			Expect(obj.Spec.Name).To(Equal("my-tailnet"))
-			Expect(obj.Spec.ControlServerRef.Name).To(Equal("my-controlserver"))
 		})
 	})
 
 	Context("When validating Tailnet", func() {
-		It("Should deny creation if controlServerRef.name is missing", func() {
-			obj := &kodiakv1alpha1.Tailnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-tailnet",
-					Namespace: "default",
-				},
-				Spec: kodiakv1alpha1.TailnetSpec{
-					Name: "my-tailnet",
-					// ControlServerRef.Name is missing
-				},
-			}
-
-			_, err := validator.ValidateCreate(ctx, obj)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("controlServerRef"))
-		})
-
 		It("Should deny creation if name is missing", func() {
 			obj := &kodiakv1alpha1.Tailnet{
 				ObjectMeta: metav1.ObjectMeta{
@@ -89,30 +67,12 @@ var _ = Describe("Tailnet Webhook", func() {
 					Namespace: "default",
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: "my-controlserver",
-					},
 					// Name is missing
 				},
 			}
 
 			_, err := validator.ValidateCreate(ctx, obj)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("name"))
-		})
-
-		It("Should deny creation if both name and controlServerRef.name are missing", func() {
-			obj := &kodiakv1alpha1.Tailnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-tailnet",
-					Namespace: "default",
-				},
-				Spec: kodiakv1alpha1.TailnetSpec{},
-			}
-
-			_, err := validator.ValidateCreate(ctx, obj)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("controlServerRef"))
 			Expect(err.Error()).To(ContainSubstring("name"))
 		})
 
@@ -124,9 +84,6 @@ var _ = Describe("Tailnet Webhook", func() {
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
 					Name: "my-tailnet",
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: "my-controlserver",
-					},
 				},
 			}
 
@@ -141,10 +98,7 @@ var _ = Describe("Tailnet Webhook", func() {
 					Namespace: "default",
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
-					Name: "my-tailnet",
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: "my-controlserver",
-					},
+					Name:      "my-tailnet",
 					IAMPolicy: `{"groups": {}}`,
 					ACLPolicy: `{"acls": []}`,
 				},
@@ -162,9 +116,6 @@ var _ = Describe("Tailnet Webhook", func() {
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
 					Name: "my-tailnet",
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: "my-controlserver",
-					},
 				},
 			}
 
@@ -175,9 +126,6 @@ var _ = Describe("Tailnet Webhook", func() {
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
 					Name: "my-tailnet-updated",
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: "my-controlserver",
-					},
 				},
 			}
 
@@ -193,9 +141,6 @@ var _ = Describe("Tailnet Webhook", func() {
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
 					Name: "my-tailnet",
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: "my-controlserver",
-					},
 				},
 			}
 
@@ -206,9 +151,6 @@ var _ = Describe("Tailnet Webhook", func() {
 				},
 				Spec: kodiakv1alpha1.TailnetSpec{
 					Name: "", // Empty name
-					ControlServerRef: corev1.LocalObjectReference{
-						Name: "my-controlserver",
-					},
 				},
 			}
 

@@ -1,0 +1,22 @@
+# ionscale configuration - SQLite backend
+# Suitable for development and single-replica deployments
+
+listen_addr: ":8080"
+metrics_listen_addr: ":9091"
+stun_listen_addr: ":3478"
+
+# Server URL - adjust if using Ingress or LoadBalancer
+server_url: "http://ionscale.kodiak-system.svc.cluster.local:8080"
+
+# SQLite database (data persisted to PVC)
+database:
+  type: sqlite
+  url: /var/lib/ionscale/ionscale.db
+
+# TLS disabled for in-cluster communication
+tls:
+  disable: true
+
+# Logging
+logging:
+  level: info

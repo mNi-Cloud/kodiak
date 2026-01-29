@@ -114,14 +114,6 @@ func (v *TailnetCustomValidator) ValidateDelete(_ context.Context, obj runtime.O
 func validateTailnet(t *kodiakv1alpha1.Tailnet) error {
 	var allErrs field.ErrorList
 
-	// Validate controlServerRef.name is required
-	if t.Spec.ControlServerRef.Name == "" {
-		allErrs = append(allErrs, field.Required(
-			field.NewPath("spec", "controlServerRef", "name"),
-			"control server reference name must be specified",
-		))
-	}
-
 	// Validate name is required
 	if t.Spec.Name == "" {
 		allErrs = append(allErrs, field.Required(

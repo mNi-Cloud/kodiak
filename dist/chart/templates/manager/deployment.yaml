@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kodiak.fullname" . }}-controller-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kodiak.manager.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.controllerManager.replicas }}
+  selector:
+    matchLabels:
+      {{- include "kodiak.manager.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+        {{- with .Values.controllerManager.pod.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "kodiak.manager.labels" . | nindent 8 }}
+        {{- with .Values.controllerManager.pod.labels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      containers:
+        - name: manager
+          image: {{ .Values.controllerManager.container.image.repository }}:{{ .Values.controllerManager.container.image.tag }}
+          command:
+            - /manager
+          args:
+            {{- range .Values.controllerManager.container.args }}
+            - {{ . }}
+            {{- end }}
+            {{- if .Values.ionscale.enabled }}
+            - "--ionscale-endpoint={{ include "kodiak.ionscale.endpoint" . }}"
+            {{- end }}
+          env:
+            {{- if .Values.ionscale.enabled }}
+            - name: IONSCALE_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kodiak.fullname" . }}-ionscale-admin
+                  key: systemAdminKey
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: 8443
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+            {{- if .Values.webhook.enable }}
+            - name: webhook
+              containerPort: 9443
+              protocol: TCP
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.controllerManager.container.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.controllerManager.container.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.controllerManager.container.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.controllerManager.container.securityContext | nindent 12 }}
+          {{- if and .Values.certmanager.enable .Values.webhook.enable }}
+          volumeMounts:
+            - name: cert
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+          {{- end }}
+      securityContext:
+        {{- toYaml .Values.controllerManager.securityContext | nindent 8 }}
+      serviceAccountName: {{ .Values.controllerManager.serviceAccountName }}
+      terminationGracePeriodSeconds: {{ .Values.controllerManager.terminationGracePeriodSeconds }}
+      {{- if and .Values.certmanager.enable .Values.webhook.enable }}
+      volumes:
+        - name: cert
+          secret:
+            secretName: {{ include "kodiak.fullname" . }}-webhook-server-cert
+            defaultMode: 420
+      {{- end }}

@@ -162,19 +162,6 @@ func validateConnector(c *kodiakv1alpha1.Connector) error {
 		}
 	}
 
-	// Validate either ControlServerUrl or ControlServerRef is provided (not both required but at least one for non-public Tailscale)
-	// This is a soft validation - the controller will handle the logic
-	hasUrl := ts.ControlServerUrl != ""
-	hasRef := ts.ControlServerRef != nil && ts.ControlServerRef.Name != ""
-
-	if hasUrl && hasRef {
-		allErrs = append(allErrs, field.Invalid(
-			field.NewPath("spec", "spec", "tailscale"),
-			ts,
-			"cannot specify both controlServerUrl and controlServerRef",
-		))
-	}
-
 	if len(allErrs) == 0 {
 		return nil
 	}

@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- deployment.yaml
+- service.yaml
+
+# Default: Development key (DO NOT use in production)
+# Production deployments should override this secret
+secretGenerator:
+- name: ionscale-admin
+  literals:
+  - systemAdminKey=dev-only-ionscale-admin-key-do-not-use-in-production
+  options:
+    disableNameSuffixHash: true
+
+commonLabels:
+  app.kubernetes.io/part-of: kodiak

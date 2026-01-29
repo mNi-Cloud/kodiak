@@ -17,7 +17,6 @@ limitations under the License.
 package v1alpha1
 
 import (
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -28,10 +27,6 @@ import (
 type TailnetSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-
-	// +kubebuilder:validation:Required
-	// ControlServerRef references the ControlServer managing this tailnet
-	ControlServerRef corev1.LocalObjectReference `json:"controlServerRef"`
 
 	// +kubebuilder:validation:Required
 	// Name of the tailnet
@@ -125,7 +120,6 @@ type TailnetStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="READY",type="boolean",JSONPath=".status.ready",description="Tailnet ready status"
 // +kubebuilder:printcolumn:name="ID",type="integer",JSONPath=".status.tailnetId",description="Tailnet ID"
-// +kubebuilder:printcolumn:name="CONTROL-SERVER",type="string",JSONPath=".spec.controlServerRef.name",description="Control server reference"
 // +kubebuilder:printcolumn:name="MACHINES",type="integer",JSONPath=".status.machineCount",description="Number of machines"
 // +kubebuilder:printcolumn:name="PHASE",type="string",JSONPath=".status.phase",description="Current phase"
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"

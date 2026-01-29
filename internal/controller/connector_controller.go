@@ -74,21 +74,23 @@ var (
 )
 
 type resolvedAuthKey struct {
-	Env               corev1.EnvVar
-	TailnetID         uint64
-	TailnetName       string
-	ControlServerName string
-	AuthKeyName       string
-	HasTailnet        bool
+	Env         corev1.EnvVar
+	TailnetID   uint64
+	TailnetName string
+	AuthKeyName string
+	HasTailnet  bool
 }
 
 // ConnectorReconciler reconciles a Connector object
 type ConnectorReconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
-	RESTClient    rest.Interface
-	Config        *rest.Config
-	ClientFactory controlclient.ClientFactory
+	Scheme           *runtime.Scheme
+	RESTClient       rest.Interface
+	Config           *rest.Config
+	ClientFactory    controlclient.ClientFactory
+	IonscaleEndpoint string
+	IonscaleAdminKey string
+	IonscaleSkipTLS  bool
 }
 
 // +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=connectors,verbs=get;list;watch;create;update;patch;delete
@@ -123,31 +125,10 @@ func (r *ConnectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return result, err
 	}
 
+	// Use explicit ControlServerUrl if specified, otherwise use controller's default endpoint
 	loginServer := resource.Spec.Spec.Tailscale.ControlServerUrl
-	if loginServer == "" && resource.Spec.Spec.Tailscale.ControlServerRef != nil && resource.Spec.Spec.Tailscale.ControlServerRef.Name != "" {
-		var controlServer v1alpha1.ControlServer
-		if err := r.Get(ctx, types.NamespacedName{Name: resource.Spec.Spec.Tailscale.ControlServerRef.Name, Namespace: resource.Namespace}, &controlServer); err != nil {
-			if apierrors.IsNotFound(err) {
-				logger.Info("ControlServer reference not found yet", "controlServer", resource.Spec.Spec.Tailscale.ControlServerRef.Name)
-				r.setCondition(&resource, conditionTypeReady, metav1.ConditionFalse, reasonProcessing, fmt.Sprintf("Waiting for control server %q", resource.Spec.Spec.Tailscale.ControlServerRef.Name))
-				if updateErr := r.Status().Update(ctx, &resource); updateErr != nil {
-					logger.Error(updateErr, "Unable to update connector status")
-				}
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-			return ctrl.Result{}, err
-		}
-
-		if !controlServer.Status.Ready || controlServer.Status.Endpoint == "" {
-			logger.Info("ControlServer not ready", "controlServer", controlServer.Name)
-			r.setCondition(&resource, conditionTypeReady, metav1.ConditionFalse, reasonProcessing, fmt.Sprintf("Control server %q is not ready", controlServer.Name))
-			if updateErr := r.Status().Update(ctx, &resource); updateErr != nil {
-				logger.Error(updateErr, "Unable to update connector status")
-			}
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
-		loginServer = controlServer.Status.Endpoint
+	if loginServer == "" {
+		loginServer = r.IonscaleEndpoint
 	}
 
 	resolvedAuth, authKeyResult, err := r.resolveAuthKey(ctx, &resource)
@@ -407,9 +388,6 @@ func (r *ConnectorReconciler) resolveAuthKey(ctx context.Context, resource *v1al
 
 			resolved.TailnetID = tailnet.Status.TailnetID
 			resolved.TailnetName = tailnet.Name
-			if tailnet.Spec.ControlServerRef.Name != "" {
-				resolved.ControlServerName = tailnet.Spec.ControlServerRef.Name
-			}
 			resolved.HasTailnet = true
 		}
 
@@ -1067,49 +1045,18 @@ func (r *ConnectorReconciler) enableRoutesIfNeeded(ctx context.Context, resource
 		return
 	}
 
-	controlServerName := ""
-	if resource.Spec.Spec.Tailscale.ControlServerRef != nil {
-		controlServerName = resource.Spec.Spec.Tailscale.ControlServerRef.Name
-	}
-	if controlServerName == "" && resolvedAuth.ControlServerName != "" {
-		controlServerName = resolvedAuth.ControlServerName
-	}
-	if controlServerName == "" {
-		logger.V(1).Info("Skipping route enablement; no control server reference available")
+	if r.IonscaleEndpoint == "" || r.IonscaleAdminKey == "" {
+		logger.V(1).Info("Skipping route enablement; ionscale configuration not available")
 		return
 	}
 
-	var controlServer v1alpha1.ControlServer
-	if err := r.Get(ctx, types.NamespacedName{Name: controlServerName, Namespace: resource.Namespace}, &controlServer); err != nil {
-		if !apierrors.IsNotFound(err) {
-			logger.Error(err, "Failed to fetch control server for route enablement", "controlServer", controlServerName)
-		}
-		return
-	}
-
-	if !controlServer.Status.Ready {
-		logger.V(1).Info("Control server not ready; skipping route enablement", "controlServer", controlServerName)
-		return
-	}
-
-	adminKey, _, err := readAdminKey(ctx, r.Client, &controlServer)
-	if err != nil {
-		logger.Error(err, "Failed to read system admin key", "controlServer", controlServerName)
-		return
-	}
-	if adminKey == "" {
-		logger.V(1).Info("System admin key empty; skipping route enablement", "controlServer", controlServerName)
-		return
-	}
-
-	endpoint, skipVerify := deriveControlServerEndpoint(&controlServer)
 	clientFactory := r.ClientFactory
 	if clientFactory == nil {
 		clientFactory = controlclient.DefaultClientFactory()
 	}
-	ctrlClient, err := clientFactory(endpoint, adminKey, skipVerify)
+	ctrlClient, err := clientFactory(r.IonscaleEndpoint, r.IonscaleAdminKey, r.IonscaleSkipTLS)
 	if err != nil {
-		logger.Error(err, "Failed to create control server client", "endpoint", endpoint)
+		logger.Error(err, "Failed to create control server client", "endpoint", r.IonscaleEndpoint)
 		return
 	}
 
