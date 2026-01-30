@@ -3,8 +3,6 @@ kind: PersistentVolumeClaim
 metadata:
   name: ionscale-data
 spec:
-  # Change storageClassName for your environment
-  storageClassName: local-path
   accessModes:
   - ReadWriteOnce
   resources:
