@@ -242,10 +242,24 @@ func (r *AuthKeyReconciler) handleDeletion(ctx context.Context, resource *kodiak
 			clientFactory = controlclient.DefaultClientFactory()
 		}
 		ctrlClient, clientErr := clientFactory(r.IonscaleEndpoint, r.IonscaleAdminKey, r.IonscaleSkipTLS)
-		if clientErr == nil {
-			if err := ctrlClient.DeleteAuthKey(ctx, resource.Status.KeyID); err != nil && !isConnectNotFound(err) {
-				logger.Error(err, "failed to delete auth key on control server")
-				return ctrl.Result{RequeueAfter: rotationRetryRequeue}, nil
+		if clientErr != nil {
+			// If we can't create a client (e.g., DNS resolution failure), log warning and proceed
+			if isConnectUnavailable(clientErr) {
+				logger.Info("control server unavailable during auth key deletion, proceeding with resource cleanup", "error", clientErr)
+			} else {
+				logger.Error(clientErr, "failed to create control server client for deletion")
+			}
+		} else {
+			if err := ctrlClient.DeleteAuthKey(ctx, resource.Status.KeyID); err != nil {
+				if isConnectNotFound(err) {
+					// Already deleted on remote, proceed
+				} else if isConnectUnavailable(err) {
+					// Control server unreachable, log warning and proceed with resource cleanup
+					logger.Info("control server unavailable during auth key deletion, proceeding with resource cleanup", "error", err)
+				} else {
+					logger.Error(err, "failed to delete auth key on control server")
+					return ctrl.Result{RequeueAfter: rotationRetryRequeue}, nil
+				}
 			}
 		}
 	}

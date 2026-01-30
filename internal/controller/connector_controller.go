@@ -656,7 +656,6 @@ func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector, log
 					Annotations: annotations,
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: "tailscale-connector",
 					Containers: []corev1.Container{
 						{
 							Name:            "tailscale",

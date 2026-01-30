@@ -18,13 +18,11 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"time"
 
-	"github.com/bufbuild/connect-go"
 	pb "github.com/jsiebens/ionscale/pkg/gen/ionscale/v1"
 	controlclient "github.com/mNi-Cloud/kodiak/internal/client"
 	corev1 "k8s.io/api/core/v1"
@@ -176,16 +174,32 @@ func (r *TailnetReconciler) handleDeletion(ctx context.Context, resource *kodiak
 }
 
 func (r *TailnetReconciler) deleteRemoteTailnet(ctx context.Context, tailnetID uint64) error {
+	logger := log.FromContext(ctx)
+
 	clientFactory := r.ClientFactory
 	if clientFactory == nil {
 		clientFactory = controlclient.DefaultClientFactory()
 	}
 	ctrlClient, err := clientFactory(r.IonscaleEndpoint, r.IonscaleAdminKey, r.IonscaleSkipTLS)
 	if err != nil {
+		// If we can't create a client (e.g., DNS resolution failure), log warning and proceed
+		if isConnectUnavailable(err) {
+			logger.Info("control server unavailable during tailnet deletion, proceeding with resource cleanup", "error", err)
+			return nil
+		}
 		return fmt.Errorf("failed to create control server client for deletion: %w", err)
 	}
 
-	if err := ctrlClient.DeleteTailnet(ctx, tailnetID, true); err != nil && !isConnectNotFound(err) {
+	if err := ctrlClient.DeleteTailnet(ctx, tailnetID, true); err != nil {
+		if isConnectNotFound(err) {
+			// Already deleted on remote, proceed
+			return nil
+		}
+		if isConnectUnavailable(err) {
+			// Control server unreachable, log warning and proceed with resource cleanup
+			logger.Info("control server unavailable during tailnet deletion, proceeding with resource cleanup", "error", err)
+			return nil
+		}
 		return fmt.Errorf("failed to delete tailnet %d: %w", tailnetID, err)
 	}
 	return nil
@@ -444,16 +458,6 @@ func stringSlicesEqual(a, b []string) bool {
 }
 
 
-func isConnectNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	var connectErr *connect.Error
-	if errors.As(err, &connectErr) {
-		return connectErr.Code() == connect.CodeNotFound
-	}
-	return false
-}
 
 // ionscaleConfig represents the ionscale configuration structure
 type ionscaleConfig struct {
