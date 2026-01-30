@@ -533,25 +533,6 @@ func (r *ConnectorReconciler) deploymentForConnector(cr *v1alpha1.Connector, log
 	// Create environment variables for the container
 	env := []corev1.EnvVar{authKeyEnv}
 
-	// Add POD_NAME and POD_UID for debugging Events
-	env = append(env, corev1.EnvVar{
-		Name: "POD_NAME",
-		ValueFrom: &corev1.EnvVarSource{
-			FieldRef: &corev1.ObjectFieldSelector{
-				FieldPath: "metadata.name",
-			},
-		},
-	})
-
-	env = append(env, corev1.EnvVar{
-		Name: "POD_UID",
-		ValueFrom: &corev1.EnvVarSource{
-			FieldRef: &corev1.ObjectFieldSelector{
-				FieldPath: "metadata.uid",
-			},
-		},
-	})
-
 	env = append(env, corev1.EnvVar{
 		Name:  "TS_USERSPACE",
 		Value: "true", // Always use USERSPACE networking mode
