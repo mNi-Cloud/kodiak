@@ -46,21 +46,8 @@ func NewControlServerClient(serverURL string, systemAdminKey string, insecureSki
 		return nil, fmt.Errorf("failed to parse server URL: %w", err)
 	}
 
-	var transport http.RoundTripper
-	if strings.ToLower(parsedURL.Scheme) == "https" {
-		// Use TLS transport for HTTPS
-		transport = &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: insecureSkipVerify,
-			},
-		}
-	} else {
-		// Use plain HTTP transport without TLS
-		transport = &http.Transport{}
-	}
-
 	httpClient := &http.Client{
-		Transport: transport,
+		Transport: newControlServerTransport(parsedURL.Scheme, insecureSkipVerify),
 		Timeout:   30 * time.Second,
 	}
 
@@ -76,6 +63,26 @@ func NewControlServerClient(serverURL string, systemAdminKey string, insecureSki
 		client: client,
 		auth:   auth,
 	}, nil
+}
+
+func newControlServerTransport(scheme string, insecureSkipVerify bool) http.RoundTripper {
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return http.DefaultTransport
+	}
+
+	clone := transport.Clone()
+	if strings.ToLower(scheme) == "https" {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: insecureSkipVerify,
+		}
+		if clone.TLSClientConfig != nil {
+			tlsConfig = clone.TLSClientConfig.Clone()
+			tlsConfig.InsecureSkipVerify = insecureSkipVerify
+		}
+		clone.TLSClientConfig = tlsConfig
+	}
+	return clone
 }
 
 // authInterceptor adds authentication to requests
