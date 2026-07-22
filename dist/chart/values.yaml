@@ -10,7 +10,7 @@ controllerManager:
   container:
     image:
       repository: ghcr.io/mni-cloud/kodiak
-      tag: "0.1.14"
+      tag: "0.1.15"
     args:
       - "--leader-elect"
       - "--metrics-bind-address=:8443"
@@ -108,10 +108,8 @@ ionscale:
     stunPort: 3478
     # External DERP map sources (URLs)
     # Use external DERP servers instead of embedded
-    sources: []
-    # Example:
-    # sources:
-    #   - https://controlplane.tailscale.com/derpmap/default
+    sources:
+      - https://controlplane.tailscale.com/derpmap/default
 
   # Logging
   logging:

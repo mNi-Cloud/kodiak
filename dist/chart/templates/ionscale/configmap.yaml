@@ -11,10 +11,14 @@ data:
     # Network Settings
     listen_addr: ":8080"
     metrics_listen_addr: ":9091"
+    {{- if .Values.ionscale.derp.enabled }}
     stun_listen_addr: ":3478"
+    {{- end }}
 
     public_addr: {{ include "kodiak.ionscale.serverUrl" . | quote }}
+    {{- if .Values.ionscale.derp.enabled }}
     stun_public_addr: "ionscale.{{ .Release.Namespace }}.svc.cluster.local:3478"
+    {{- end }}
 
     # Database
     database:
