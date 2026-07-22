@@ -14,7 +14,7 @@ data:
     stun_listen_addr: ":3478"
 
     public_addr: {{ include "kodiak.ionscale.serverUrl" . | quote }}
-    stun_public_addr: "{{ include "kodiak.fullname" . }}-ionscale.{{ .Release.Namespace }}.svc.cluster.local:3478"
+    stun_public_addr: "ionscale.{{ .Release.Namespace }}.svc.cluster.local:3478"
 
     # Database
     database:
