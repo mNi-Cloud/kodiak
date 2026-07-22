@@ -29,10 +29,11 @@ data:
     # TLS
     tls:
       disable: {{ .Values.ionscale.tls.disable }}
+      force_https: {{ not .Values.ionscale.tls.disable }}
 
     # Keys
     keys:
-      system_admin_key: ${IONSCALE_SYSTEM_ADMIN_KEY}
+      system_admin_key: ""
 
     # DERP
     derp:

@@ -13,6 +13,9 @@ spec:
       {{- include "kodiak.ionscale.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/ionscale/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/ionscale/secret.yaml") . | sha256sum }}
       labels:
         {{- include "kodiak.ionscale.labels" . | nindent 8 }}
     spec:
@@ -34,7 +37,7 @@ spec:
               containerPort: 3478
               protocol: UDP
           env:
-            - name: IONSCALE_SYSTEM_ADMIN_KEY
+            - name: IONSCALE_KEYS_SYSTEM_ADMIN_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "kodiak.fullname" . }}-ionscale-admin
@@ -51,14 +54,16 @@ spec:
             {{- toYaml .Values.ionscale.resources | nindent 12 }}
           livenessProbe:
             httpGet:
-              path: /health
+              path: /version
               port: api
+              scheme: HTTP
             initialDelaySeconds: 10
             periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /health
+              path: /version
               port: api
+              scheme: HTTP
             initialDelaySeconds: 5
             periodSeconds: 5
       volumes:

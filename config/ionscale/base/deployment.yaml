@@ -33,7 +33,7 @@ spec:
           containerPort: 3478
           protocol: UDP
         env:
-        - name: IONSCALE_SYSTEM_ADMIN_KEY
+        - name: IONSCALE_KEYS_SYSTEM_ADMIN_KEY
           valueFrom:
             secretKeyRef:
               name: ionscale-admin
@@ -49,21 +49,20 @@ spec:
           requests:
             cpu: 100m
             memory: 128Mi
-        # TODO: Fix probe HTTPS issue with kube-ovn
-        # livenessProbe:
-        #   httpGet:
-        #     path: /health
-        #     port: 8080
-        #     scheme: HTTP
-        #   initialDelaySeconds: 10
-        #   periodSeconds: 10
-        # readinessProbe:
-        #   httpGet:
-        #     path: /health
-        #     port: 8080
-        #     scheme: HTTP
-        #   initialDelaySeconds: 5
-        #   periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /version
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /version
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 5
       volumes:
       - name: config
         configMap:

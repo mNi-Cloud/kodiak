@@ -10,7 +10,7 @@ controllerManager:
   container:
     image:
       repository: ghcr.io/mni-cloud/kodiak
-      tag: latest
+      tag: "0.1.10"
     args:
       - "--leader-elect"
       - "--metrics-bind-address=:8443"

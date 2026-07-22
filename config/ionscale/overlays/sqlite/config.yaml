@@ -40,10 +40,9 @@ tls:
 # =============================================================================
 # Keys
 # =============================================================================
-# Note: For kustomize deployment, this is replaced by secretGenerator
-# For development, use fixed key below
+# Provided through IONSCALE_KEYS_SYSTEM_ADMIN_KEY from the generated Secret.
 keys:
-  system_admin_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  system_admin_key: ""
   # control_key: ""
   # legacy_control_key: ""
 

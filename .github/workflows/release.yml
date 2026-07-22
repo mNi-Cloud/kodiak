@@ -84,13 +84,19 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
       - name: Generate install manifests
         run: |
           make build-installer IMG=${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:${{ github.ref_name }}
+          VERSION="${GITHUB_REF_NAME#v}"
+          helm package dist/chart --destination dist --version "$VERSION" --app-version "$VERSION"
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
           files: |
             dist/install.yaml
+            dist/kodiak-*.tgz
           generate_release_notes: true
