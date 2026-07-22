@@ -10,7 +10,7 @@ controllerManager:
   container:
     image:
       repository: ghcr.io/mni-cloud/kodiak
-      tag: "0.1.15"
+      tag: "0.1.16"
     args:
       - "--leader-elect"
       - "--metrics-bind-address=:8443"
@@ -131,6 +131,16 @@ ionscale:
     port: 8080
     metricsPort: 9091
     stunPort: 3478
+
+  # Optional dedicated LoadBalancer Service for the Tailscale control protocol.
+  # Metrics and STUN remain available only through the internal Service.
+  externalService:
+    enabled: false
+    name: ionscale-control
+    annotations: {}
+    loadBalancerClass: ""
+    externalTrafficPolicy: Local
+    port: 8080
 
 # =============================================================================
 # [RBAC]: Role-Based Access Control
