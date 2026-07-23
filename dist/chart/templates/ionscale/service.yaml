@@ -4,6 +4,10 @@ kind: Service
 metadata:
   name: ionscale
   namespace: {{ .Release.Namespace }}
+  {{- with .Values.ionscale.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   labels:
     {{- include "kodiak.ionscale.labels" . | nindent 4 }}
 spec:

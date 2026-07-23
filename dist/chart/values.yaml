@@ -128,6 +128,8 @@ ionscale:
   # Service configuration
   service:
     type: ClusterIP
+    annotations:
+      juneau.loutres.me/shared-service: "true"
     port: 8080
     metricsPort: 9091
     stunPort: 3478
