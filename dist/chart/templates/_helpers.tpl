@@ -79,7 +79,11 @@ http://ionscale.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.ionscale.s
 Internal Ionscale API endpoint used by the controller.
 */}}
 {{- define "kodiak.ionscale.apiEndpoint" -}}
+{{- if .Values.ionscale.tls.disable -}}
 http://ionscale.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.ionscale.service.port }}
+{{- else -}}
+{{ include "kodiak.ionscale.serverURL" . }}
+{{- end -}}
 {{- end }}
 
 {{/*

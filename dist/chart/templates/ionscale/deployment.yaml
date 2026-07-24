@@ -44,6 +44,11 @@ spec:
                   name: {{ include "kodiak.fullname" . }}-ionscale-admin
                   key: systemAdminKey
           volumeMounts:
+            {{- if not .Values.ionscale.tls.disable }}
+            - name: tls
+              mountPath: /etc/ionscale/tls
+              readOnly: true
+            {{- end }}
             - name: config
               mountPath: /etc/ionscale
               readOnly: true
@@ -57,17 +62,27 @@ spec:
             httpGet:
               path: /version
               port: api
-              scheme: HTTP
+              scheme: {{ ternary "HTTP" "HTTPS" .Values.ionscale.tls.disable }}
             initialDelaySeconds: 10
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /version
               port: api
-              scheme: HTTP
+              scheme: {{ ternary "HTTP" "HTTPS" .Values.ionscale.tls.disable }}
             initialDelaySeconds: 5
             periodSeconds: 5
       volumes:
+        {{- if not .Values.ionscale.tls.disable }}
+        - name: tls
+          secret:
+            secretName: {{ required "ionscale.tls.existingSecret is required when Ionscale TLS is enabled" .Values.ionscale.tls.existingSecret }}
+            items:
+              - key: {{ .Values.ionscale.tls.certKey }}
+                path: cert.pem
+              - key: {{ .Values.ionscale.tls.privateKeyKey }}
+                path: key.pem
+        {{- end }}
         - name: config
           configMap:
             name: {{ include "kodiak.fullname" . }}-ionscale-config

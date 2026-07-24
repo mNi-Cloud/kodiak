@@ -31,6 +31,10 @@ data:
     tls:
       disable: {{ .Values.ionscale.tls.disable }}
       force_https: {{ not .Values.ionscale.tls.disable }}
+      {{- if not .Values.ionscale.tls.disable }}
+      cert_file: /etc/ionscale/tls/cert.pem
+      key_file: /etc/ionscale/tls/key.pem
+      {{- end }}
 
     keys:
       system_admin_key: ""

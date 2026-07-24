@@ -52,11 +52,22 @@ helm upgrade --install kodiak ./dist/chart \
   -f values.yaml
 ```
 
+To terminate TLS in the bundled Ionscale server, reference an existing
+Kubernetes TLS Secret:
+
+```yaml
+ionscale:
+  serverUrl: https://vpn.example.com
+  tls:
+    disable: false
+    existingSecret: vpn-example-com-tls
+```
+
 For Kustomize development installs:
 
 ```sh
 make install
-make deploy IMG=ghcr.io/mni-cloud/kodiak:0.2.2
+make deploy IMG=ghcr.io/mni-cloud/kodiak:0.2.3
 ```
 
 Patch `IONSCALE_API_ENDPOINT`, `IONSCALE_LOGIN_URL`, and the optional

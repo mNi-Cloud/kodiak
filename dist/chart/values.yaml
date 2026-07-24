@@ -45,6 +45,9 @@ ionscale:
       - ReadWriteOnce
   tls:
     disable: true
+    existingSecret: ""
+    certKey: tls.crt
+    privateKeyKey: tls.key
   derp:
     enabled: false
     regionId: 900
