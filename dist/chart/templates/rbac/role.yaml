@@ -1,4 +1,5 @@
 {{- if .Values.rbac.enable }}
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -10,28 +11,7 @@ rules:
   - ""
   resources:
   - pods
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - secrets
-  - serviceaccounts
-  - services
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - apps
-  resources:
-  - statefulsets
   verbs:
   - create
   - delete
@@ -44,6 +24,7 @@ rules:
   - kodiak.mnicloud.jp
   resources:
   - authkeys
+  - connectorinstances
   - connectors
   - tailnets
   verbs:
@@ -58,6 +39,7 @@ rules:
   - kodiak.mnicloud.jp
   resources:
   - authkeys/finalizers
+  - connectorinstances/finalizers
   - connectors/finalizers
   - tailnets/finalizers
   verbs:
@@ -66,23 +48,11 @@ rules:
   - kodiak.mnicloud.jp
   resources:
   - authkeys/status
+  - connectorinstances/status
   - connectors/status
   - tailnets/status
   verbs:
   - get
   - patch
   - update
-- apiGroups:
-  - rbac.authorization.k8s.io
-  resources:
-  - rolebindings
-  - roles
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
 {{- end }}

@@ -73,7 +73,7 @@ var _ = Describe("Kodiak v0.2", Ordered, func() {
 
 	})
 
-	It("reconciles an external Connector into stable kernel-networking resources", func() {
+	It("reconciles an external Connector into an API-isolated replaceable instance", func() {
 		manifest := `
 apiVersion: v1
 kind: Secret
@@ -102,23 +102,48 @@ spec:
 		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 		defer func() {
-			_, _ = utils.Run(exec.Command("kubectl", "delete", "connector", "e2e", "-n", "default", "--wait=false"))
+			_, _ = utils.Run(exec.Command(
+				"kubectl", "delete", "connector", "e2e", "-n", "default", "--timeout=90s",
+			))
 			_, _ = utils.Run(exec.Command("kubectl", "delete", "secret", "e2e-auth", "-n", "default"))
 		}()
 
 		Eventually(func() error {
-			_, err := utils.Run(exec.Command("kubectl", "get", "statefulset", "e2e-connector", "-n", "default"))
+			_, err := utils.Run(exec.Command(
+				"kubectl", "get", "connectorinstance", "-n", "default",
+				"-l", "kodiak.mnicloud.jp/connector=e2e",
+			))
 			return err
 		}).Should(Succeed())
-		_, err = utils.Run(exec.Command("kubectl", "get", "secret", "e2e-connector-0", "-n", "default"))
-		Expect(err).NotTo(HaveOccurred())
 
 		output, err := utils.Run(exec.Command(
-			"kubectl", "get", "statefulset", "e2e-connector", "-n", "default",
-			"-o", "jsonpath={.spec.template.spec.containers[0].env[?(@.name=='TS_USERSPACE')].value}",
+			"kubectl", "get", "connectorinstance", "-n", "default",
+			"-l", "kodiak.mnicloud.jp/connector=e2e",
+			"-o", "jsonpath={.items[0].metadata.name}",
 		))
 		Expect(err).NotTo(HaveOccurred())
-		Expect(output).To(Equal("false"))
+		Expect(output).NotTo(BeEmpty())
+		instanceName := output
+
+		Eventually(func() error {
+			_, err := utils.Run(exec.Command("kubectl", "get", "pod", instanceName, "-n", "default"))
+			return err
+		}).Should(Succeed())
+		output, err = utils.Run(exec.Command(
+			"kubectl", "get", "pod", instanceName, "-n", "default",
+			"-o", "jsonpath={.spec.automountServiceAccountToken}:"+
+				"{.spec.containers[0].env[?(@.name=='TS_KUBE_SECRET')].value}:"+
+				"{.spec.volumes[?(@.name=='tailscale-state')].emptyDir}",
+		))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(output).To(Equal("false::{}"))
+
+		output, err = utils.Run(exec.Command(
+			"kubectl", "get", "secret", "e2e-auth", "-n", "default",
+			"-o", "jsonpath={.data.TS_AUTH_KEY}",
+		))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(output).NotTo(BeEmpty())
 	})
 
 	It("enforces the v0.2 Connector source union in the API server", func() {

@@ -23,13 +23,15 @@ import (
 
 const (
 	ConnectorConditionReady             = "Ready"
+	ConnectorConditionAvailable         = "Available"
 	ConnectorConditionWorkloadReady     = "WorkloadReady"
-	ConnectorConditionIdentityReady     = "IdentityReady"
 	ConnectorConditionControlPlaneReady = "ControlPlaneReady"
 	ConnectorConditionRoutesReady       = "RoutesReady"
 )
 
-// ConnectorSpec describes a kernel-networking Tailscale subnet router.
+// ConnectorSpec describes a logical kernel-networking Tailscale subnet-router
+// service. Individual Tailscale devices are replaceable implementation
+// resources and are not stable identities.
 //
 // A managed Connector references a Kodiak Tailnet. Kodiak creates short-lived
 // bootstrap credentials for each replica and observes the corresponding
@@ -78,7 +80,7 @@ type ConnectorSpec struct {
 	// +required
 	SubnetRouter SubnetRouterSpec `json:"subnetRouter"`
 
-	// Workload customizes the generated StatefulSet without exposing
+	// Workload customizes the generated Pods without exposing
 	// Tailscale implementation flags.
 	// +optional
 	Workload ConnectorWorkloadSpec `json:"workload,omitempty"`
@@ -130,7 +132,7 @@ type ConnectorPodMetadata struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// ConnectorStatus reports workload, identity, and managed control-plane state.
+// ConnectorStatus reports aggregate workload and managed control-plane state.
 type ConnectorStatus struct {
 	// ObservedGeneration is the most recent generation reconciled.
 	// +optional
@@ -140,7 +142,8 @@ type ConnectorStatus struct {
 	// +optional
 	ManagedTailnetID string `json:"managedTailnetID,omitempty"`
 
-	// Devices reports one stable identity per desired replica.
+	// Devices reports the active external device for each desired replica slot.
+	// Device IDs, addresses, and hostnames can change when a Pod is replaced.
 	// +optional
 	// +listType=map
 	// +listMapKey=ordinal
@@ -153,12 +156,12 @@ type ConnectorStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
-// ConnectorDeviceStatus is the observed state for one StatefulSet ordinal.
+// ConnectorDeviceStatus is the observed state for one replaceable replica.
 type ConnectorDeviceStatus struct {
-	// Ordinal identifies the StatefulSet replica.
+	// Ordinal identifies the logical replica slot.
 	Ordinal int32 `json:"ordinal"`
 
-	// DeviceID is the stable Tailscale node ID written by containerboot.
+	// DeviceID is the provider's current Tailscale node ID when available.
 	// +optional
 	DeviceID string `json:"deviceID,omitempty"`
 

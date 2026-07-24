@@ -8,32 +8,37 @@ metadata:
     {{- if .Values.crd.keep }}
     helm.sh/resource-policy: keep
     {{- end }}
-  name: connectors.kodiak.mnicloud.jp
+  name: connectorinstances.kodiak.mnicloud.jp
 spec:
   group: kodiak.mnicloud.jp
   names:
-    kind: Connector
-    listKind: ConnectorList
-    plural: connectors
+    kind: ConnectorInstance
+    listKind: ConnectorInstanceList
+    plural: connectorinstances
     shortNames:
-    - kconnector
-    singular: connector
+    - kconnectorinstance
+    singular: connectorinstance
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .spec.connectorRef.name
+      name: CONNECTOR
+      type: string
+    - jsonPath: .spec.slot
+      name: SLOT
+      type: integer
     - jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: READY
       type: string
-    - jsonPath: .spec.replicas
-      name: REPLICAS
-      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: AGE
       type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Connector is the Schema for subnet-router Connectors.
+        description: |-
+          ConnectorInstance is an internal lifecycle record for one replaceable
+          Connector device and its Pod.
         properties:
           apiVersion:
             description: |-
@@ -54,19 +59,21 @@ spec:
             type: object
           spec:
             description: |-
-              ConnectorSpec describes a logical kernel-networking Tailscale subnet-router
-              service. Individual Tailscale devices are replaceable implementation
-              resources and are not stable identities.
-
-              A managed Connector references a Kodiak Tailnet. Kodiak creates short-lived
-              bootstrap credentials for each replica and observes the corresponding
-              Ionscale machines. An externally managed Connector references an existing
-              auth-key Secret and can optionally set a custom login URL.
+              ConnectorInstanceSpec is an immutable snapshot of one Connector replica
+              incarnation. ConnectorInstance is an implementation resource owned by a
+              Connector, not a user-facing identity resource.
             properties:
+              advertiseRoutes:
+                description: AdvertiseRoutes are the exact prefixes served by this
+                  instance.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
               authKeySecretRef:
                 description: |-
-                  AuthKeySecretRef selects an externally managed bootstrap auth key.
-                  The referenced key defaults to TS_AUTH_KEY.
+                  AuthKeySecretRef selects an externally managed bootstrap key.
+                  It is mutually exclusive with managedTailnetID.
                 properties:
                   key:
                     description: The key of the secret to select from.  Must be a
@@ -91,57 +98,8 @@ spec:
                 x-kubernetes-validations:
                 - message: authKeySecretRef is immutable
                   rule: self == oldSelf
-              loginURL:
-                description: |-
-                  LoginURL is the control-plane URL for an externally managed Connector.
-                  Empty uses the Tailscale client default.
-                pattern: ^https://[^[:space:]]+$
-                type: string
-                x-kubernetes-validations:
-                - message: loginURL is immutable
-                  rule: self == oldSelf
-              replicas:
-                default: 1
-                description: Replicas is the number of independent subnet-router devices.
-                format: int32
-                maximum: 5
-                minimum: 1
-                type: integer
-              subnetRouter:
-                description: SubnetRouter defines the routes advertised by the Connector.
-                properties:
-                  advertiseRoutes:
-                    description: |-
-                      AdvertiseRoutes is the canonical CIDR set advertised by each replica.
-                      Route approval remains a control-plane policy concern.
-                    items:
-                      maxLength: 49
-                      type: string
-                    maxItems: 64
-                    minItems: 1
-                    type: array
-                    x-kubernetes-list-type: set
-                    x-kubernetes-validations:
-                    - message: advertiseRoutes must contain canonical CIDRs
-                      rule: self.all(r, isCIDR(r) && r == string(cidr(r).masked()))
-                required:
-                - advertiseRoutes
-                type: object
-              tags:
-                description: |-
-                  Tags are advertised by every Connector replica. Managed Connectors use
-                  the same tags on their internally generated bootstrap credentials.
-                items:
-                  pattern: ^tag:[a-zA-Z0-9][a-zA-Z0-9-]*$
-                  type: string
-                maxItems: 16
-                type: array
-                x-kubernetes-list-type: set
-                x-kubernetes-validations:
-                - message: tags are immutable
-                  rule: self == oldSelf
-              tailnetRef:
-                description: TailnetRef selects a Kodiak-managed Tailnet.
+              connectorRef:
+                description: ConnectorRef identifies the owning logical Connector.
                 properties:
                   name:
                     default: ""
@@ -155,12 +113,53 @@ spec:
                 type: object
                 x-kubernetes-map-type: atomic
                 x-kubernetes-validations:
-                - message: tailnetRef is immutable
+                - message: connectorRef is immutable
                   rule: self == oldSelf
-              workload:
+              image:
+                description: Image is the stock Tailscale container image.
+                type: string
+              loginURL:
+                description: LoginURL is the Tailscale protocol endpoint.
+                pattern: ^https://[^[:space:]]+$
+                type: string
+                x-kubernetes-validations:
+                - message: loginURL is immutable
+                  rule: self == oldSelf
+              managedTailnetID:
                 description: |-
-                  Workload customizes the generated Pods without exposing
-                  Tailscale implementation flags.
+                  ManagedTailnetID selects a Kodiak-managed Ionscale Tailnet. Empty means
+                  the control plane is externally managed.
+                pattern: ^[0-9]+$
+                type: string
+                x-kubernetes-validations:
+                - message: managedTailnetID is immutable
+                  rule: self == oldSelf
+              revision:
+                description: Revision changes whenever the resolved Connector configuration
+                  changes.
+                maxLength: 64
+                minLength: 8
+                type: string
+                x-kubernetes-validations:
+                - message: revision is immutable
+                  rule: self == oldSelf
+              slot:
+                description: Slot is the logical replica position served by this incarnation.
+                format: int32
+                minimum: 0
+                type: integer
+                x-kubernetes-validations:
+                - message: slot is immutable
+                  rule: self == oldSelf
+              tags:
+                description: Tags are the policy identity requested for the external
+                  device.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              workload:
+                description: Workload is the resolved Pod configuration.
                 properties:
                   affinity:
                     description: Affinity is applied to Connector Pods.
@@ -1208,21 +1207,23 @@ spec:
                     type: array
                 type: object
             required:
-            - subnetRouter
+            - advertiseRoutes
+            - connectorRef
+            - image
+            - revision
+            - slot
             type: object
             x-kubernetes-validations:
-            - message: exactly one of tailnetRef or authKeySecretRef must be specified
-              rule: has(self.tailnetRef) != has(self.authKeySecretRef)
-            - message: loginURL is derived from Tailnet when tailnetRef is specified
-              rule: '!has(self.tailnetRef) || !has(self.loginURL)'
-            - message: managed Connectors must specify at least one tag
-              rule: '!has(self.tailnetRef) || size(self.tags) > 0'
+            - message: exactly one of managedTailnetID or authKeySecretRef must be
+                specified
+              rule: has(self.managedTailnetID) != has(self.authKeySecretRef)
           status:
-            description: ConnectorStatus reports aggregate workload and managed control-plane
-              state.
+            description: |-
+              ConnectorInstanceStatus records the external child currently associated
+              with one Pod incarnation. It never contains tailscaled private state.
             properties:
               conditions:
-                description: Conditions contains the canonical readiness state.
+                description: Conditions reports provisioning and route readiness.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -1281,65 +1282,63 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              devices:
-                description: |-
-                  Devices reports the active external device for each desired replica slot.
-                  Device IDs, addresses, and hostnames can change when a Pod is replaced.
-                items:
-                  description: ConnectorDeviceStatus is the observed state for one
-                    replaceable replica.
-                  properties:
-                    advertisedRoutes:
-                      description: AdvertisedRoutes are observed from the managed
-                        control plane.
-                      items:
-                        type: string
-                      type: array
-                    connected:
-                      description: Connected is reported only when the managed control
-                        plane provides it.
-                      type: boolean
-                    deviceID:
-                      description: DeviceID is the provider's current Tailscale node
-                        ID when available.
+              device:
+                description: Device is the last external control-plane observation.
+                properties:
+                  advertisedRoutes:
+                    description: AdvertisedRoutes are observed from the managed control
+                      plane.
+                    items:
                       type: string
-                    enabledRoutes:
-                      description: EnabledRoutes are routes approved by control-plane
-                        policy.
-                      items:
-                        type: string
-                      type: array
-                    hostname:
-                      description: Hostname is the control-plane device hostname.
+                    type: array
+                  connected:
+                    description: Connected is reported only when the managed control
+                      plane provides it.
+                    type: boolean
+                  deviceID:
+                    description: DeviceID is the provider's current Tailscale node
+                      ID when available.
+                    type: string
+                  enabledRoutes:
+                    description: EnabledRoutes are routes approved by control-plane
+                      policy.
+                    items:
                       type: string
-                    machineID:
-                      description: MachineID is the Ionscale machine ID for a managed
-                        Connector.
+                    type: array
+                  hostname:
+                    description: Hostname is the control-plane device hostname.
+                    type: string
+                  machineID:
+                    description: MachineID is the Ionscale machine ID for a managed
+                      Connector.
+                    type: string
+                  ordinal:
+                    description: Ordinal identifies the logical replica slot.
+                    format: int32
+                    type: integer
+                  tailnetIPs:
+                    description: TailnetIPs are the assigned Tailscale addresses.
+                    items:
                       type: string
-                    ordinal:
-                      description: Ordinal identifies the logical replica slot.
-                      format: int32
-                      type: integer
-                    tailnetIPs:
-                      description: TailnetIPs are the assigned Tailscale addresses.
-                      items:
-                        type: string
-                      type: array
-                  required:
-                  - ordinal
-                  type: object
-                type: array
-                x-kubernetes-list-map-keys:
+                    type: array
+                required:
                 - ordinal
-                x-kubernetes-list-type: map
-              managedTailnetID:
-                description: ManagedTailnetID records the Ionscale Tailnet used for
-                  exact cleanup.
-                type: string
+                type: object
               observedGeneration:
-                description: ObservedGeneration is the most recent generation reconciled.
+                description: ObservedGeneration is the latest reconciled generation.
                 format: int64
                 type: integer
+              podName:
+                description: PodName is the controller-owned Pod for this incarnation.
+                type: string
+              podUID:
+                description: PodUID disambiguates a recreated Pod with the same name.
+                type: string
+              requestedHostname:
+                description: |-
+                  RequestedHostname is the unique correlation key presented to the
+                  control plane during registration.
+                type: string
             type: object
         required:
         - spec

@@ -25,9 +25,7 @@ import (
 	"strings"
 
 	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
@@ -36,271 +34,180 @@ import (
 const (
 	LabelManaged   = "kodiak.mnicloud.jp/managed"
 	LabelConnector = "kodiak.mnicloud.jp/connector"
+	LabelInstance  = "kodiak.mnicloud.jp/connector-instance"
+	LabelSlot      = "kodiak.mnicloud.jp/slot"
+	LabelRevision  = "kodiak.mnicloud.jp/revision"
 	LabelComponent = "app.kubernetes.io/component"
 
 	HealthPort = 9002
 )
 
-// Names are deterministic child-resource names for a Connector.
-type Names struct {
-	StatefulSet    string
-	Service        string
-	ServiceAccount string
-	Role           string
-	RoleBinding    string
-}
-
-// ChildNames returns all non-replica child names.
-func ChildNames(connectorName string) Names {
-	base := connectorName + "-connector"
-	const maxBaseLength = 52
-	if len(base) > maxBaseLength {
-		sum := sha256.Sum256([]byte(base))
-		suffix := fmt.Sprintf("-%x", sum[:4])
-		base = strings.TrimRight(base[:maxBaseLength-len(suffix)], "-") + suffix
-	}
-	return Names{
-		StatefulSet:    base,
-		Service:        base,
-		ServiceAccount: base,
-		Role:           base,
-		RoleBinding:    base,
-	}
-}
-
 // ConnectorLabelValue is a DNS-label-safe stable identity for child lookups.
 func ConnectorLabelValue(connectorName string) string {
-	return ChildNames(connectorName).StatefulSet
+	return safeName(connectorName, 63)
 }
 
-// StateSecretName returns the state Secret name for a StatefulSet ordinal.
-func StateSecretName(connectorName string, ordinal int32) string {
-	return fmt.Sprintf("%s-%d", ChildNames(connectorName).StatefulSet, ordinal)
+// InstanceGenerateName returns the prefix for a replaceable replica instance.
+func InstanceGenerateName(connectorName string, slot int32) string {
+	return safeName(fmt.Sprintf("%s-%d", connectorName, slot), 57) + "-"
 }
 
-// SelectorLabels are controller-owned and cannot be overridden by workload metadata.
-func SelectorLabels(connector *kodiakv1alpha1.Connector) map[string]string {
+// RequestedHostname is a collision-resistant device hostname derived from an
+// immutable ConnectorInstance UID.
+func RequestedHostname(instance *kodiakv1alpha1.ConnectorInstance) string {
+	raw := strings.ReplaceAll(string(instance.UID), "-", "")
+	if len(raw) > 24 {
+		raw = raw[:24]
+	}
+	return "kdk-" + raw
+}
+
+// BootstrapSecretName returns the transient auth-key Secret name.
+func BootstrapSecretName(instanceName string) string {
+	return safeName(instanceName+"-bootstrap", 63)
+}
+
+// InstanceLabels are controller-owned and cannot be overridden by workload metadata.
+func InstanceLabels(instance *kodiakv1alpha1.ConnectorInstance) map[string]string {
 	return map[string]string{
 		LabelManaged:                   "true",
-		LabelConnector:                 ConnectorLabelValue(connector.Name),
+		LabelConnector:                 ConnectorLabelValue(instance.Spec.ConnectorRef.Name),
+		LabelInstance:                  ConnectorLabelValue(instance.Name),
+		LabelSlot:                      fmt.Sprintf("%d", instance.Spec.Slot),
+		LabelRevision:                  instance.Spec.Revision,
 		LabelComponent:                 "subnet-router",
 		"app.kubernetes.io/name":       "tailscale",
-		"app.kubernetes.io/instance":   ConnectorLabelValue(connector.Name),
+		"app.kubernetes.io/instance":   ConnectorLabelValue(instance.Spec.ConnectorRef.Name),
 		"app.kubernetes.io/managed-by": "kodiak",
 	}
 }
 
-// PodLabels merges user labels while preserving controller-owned selectors.
-func PodLabels(connector *kodiakv1alpha1.Connector) map[string]string {
-	labels := make(map[string]string, len(connector.Spec.Workload.Metadata.Labels)+6)
-	for key, value := range connector.Spec.Workload.Metadata.Labels {
+// Pod returns one replaceable, kernel-networking subnet-router. tailscaled
+// state is intentionally scoped to the Pod incarnation and never stored in
+// Kubernetes. The Pod has no service-account token and no Kubernetes API
+// credentials.
+func Pod(instance *kodiakv1alpha1.ConnectorInstance, authSecretName, authSecretKey string) *corev1.Pod {
+	extraArgs := []string{
+		"--snat-subnet-routes=true",
+		"--stateful-filtering=true",
+	}
+	if instance.Spec.LoginURL != "" {
+		extraArgs = append(extraArgs, "--login-server="+instance.Spec.LoginURL)
+	}
+	if len(instance.Spec.Tags) != 0 {
+		tags := append([]string(nil), instance.Spec.Tags...)
+		sort.Strings(tags)
+		extraArgs = append(extraArgs, "--advertise-tags="+strings.Join(tags, ","))
+	}
+
+	labels := make(map[string]string, len(instance.Spec.Workload.Metadata.Labels)+8)
+	for key, value := range instance.Spec.Workload.Metadata.Labels {
 		labels[key] = value
 	}
-	for key, value := range SelectorLabels(connector) {
+	for key, value := range InstanceLabels(instance) {
 		labels[key] = value
 	}
-	return labels
-}
-
-// ServiceAccount returns the dedicated identity used by containerboot.
-func ServiceAccount(connector *kodiakv1alpha1.Connector) *corev1.ServiceAccount {
-	names := ChildNames(connector.Name)
-	return &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      names.ServiceAccount,
-			Namespace: connector.Namespace,
-			Labels:    SelectorLabels(connector),
-		},
-		AutomountServiceAccountToken: ptr.To(true),
+	annotations := make(map[string]string, len(instance.Spec.Workload.Metadata.Annotations))
+	for key, value := range instance.Spec.Workload.Metadata.Annotations {
+		annotations[key] = value
 	}
-}
 
-// Role permits containerboot to update only the pre-created per-replica state Secrets.
-func Role(connector *kodiakv1alpha1.Connector, replicas int32) *rbacv1.Role {
-	names := ChildNames(connector.Name)
-	resourceNames := make([]string, 0, replicas)
-	for ordinal := int32(0); ordinal < replicas; ordinal++ {
-		resourceNames = append(resourceNames, StateSecretName(connector.Name, ordinal))
-	}
-	return &rbacv1.Role{
+	privileged := ptr.To(true)
+	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      names.Role,
-			Namespace: connector.Namespace,
-			Labels:    SelectorLabels(connector),
+			Name:        instance.Name,
+			Namespace:   instance.Namespace,
+			Labels:      labels,
+			Annotations: annotations,
 		},
-		Rules: []rbacv1.PolicyRule{{
-			APIGroups:     []string{""},
-			Resources:     []string{"secrets"},
-			ResourceNames: resourceNames,
-			Verbs:         []string{"get", "patch", "update"},
-		}},
-	}
-}
-
-// RoleBinding binds the per-Connector state Secret Role.
-func RoleBinding(connector *kodiakv1alpha1.Connector) *rbacv1.RoleBinding {
-	names := ChildNames(connector.Name)
-	return &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      names.RoleBinding,
-			Namespace: connector.Namespace,
-			Labels:    SelectorLabels(connector),
-		},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "Role",
-			Name:     names.Role,
-		},
-		Subjects: []rbacv1.Subject{{
-			Kind:      rbacv1.ServiceAccountKind,
-			Name:      names.ServiceAccount,
-			Namespace: connector.Namespace,
-		}},
-	}
-}
-
-// HeadlessService provides the stable network identity required by StatefulSet.
-func HeadlessService(connector *kodiakv1alpha1.Connector) *corev1.Service {
-	names := ChildNames(connector.Name)
-	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      names.Service,
-			Namespace: connector.Namespace,
-			Labels:    SelectorLabels(connector),
-		},
-		Spec: corev1.ServiceSpec{
-			ClusterIP:                corev1.ClusterIPNone,
-			PublishNotReadyAddresses: true,
-			Selector:                 SelectorLabels(connector),
-			Ports: []corev1.ServicePort{{
-				Name: "health",
-				Port: HealthPort,
+		Spec: corev1.PodSpec{
+			AutomountServiceAccountToken: ptr.To(false),
+			NodeSelector:                 instance.Spec.Workload.NodeSelector,
+			Tolerations:                  instance.Spec.Workload.Tolerations,
+			Affinity:                     instance.Spec.Workload.Affinity,
+			InitContainers: []corev1.Container{{
+				Name:            "sysctler",
+				Image:           instance.Spec.Image,
+				ImagePullPolicy: corev1.PullIfNotPresent,
+				Command:         []string{"/bin/sh", "-c"},
+				Args: []string{
+					"sysctl -w net.ipv4.ip_forward=1 && if sysctl net.ipv6.conf.all.forwarding; then sysctl -w net.ipv6.conf.all.forwarding=1; fi",
+				},
+				SecurityContext: &corev1.SecurityContext{Privileged: privileged},
+			}},
+			Containers: []corev1.Container{{
+				Name:            "tailscale",
+				Image:           instance.Spec.Image,
+				ImagePullPolicy: corev1.PullIfNotPresent,
+				Env: []corev1.EnvVar{
+					{
+						Name: "TS_AUTHKEY",
+						ValueFrom: &corev1.EnvVarSource{
+							SecretKeyRef: &corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{Name: authSecretName},
+								Key:                  authSecretKey,
+							},
+						},
+					},
+					{Name: "TS_KUBE_SECRET", Value: ""},
+					{Name: "TS_STATE_DIR", Value: "/var/lib/tailscale"},
+					{Name: "TS_USERSPACE", Value: "false"},
+					{Name: "TS_AUTH_ONCE", Value: "true"},
+					{Name: "TS_ACCEPT_DNS", Value: "false"},
+					{Name: "TS_HOSTNAME", Value: RequestedHostname(instance)},
+					{Name: "TS_ROUTES", Value: strings.Join(instance.Spec.AdvertiseRoutes, ",")},
+					{Name: "TS_EXTRA_ARGS", Value: strings.Join(extraArgs, " ")},
+					{Name: "TS_ENABLE_HEALTH_CHECK", Value: "true"},
+					{Name: "TS_LOCAL_ADDR_PORT", Value: fmt.Sprintf("[::]:%d", HealthPort)},
+					{Name: "TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", Value: "true"},
+				},
+				Resources:       instance.Spec.Workload.Resources,
+				SecurityContext: &corev1.SecurityContext{Privileged: privileged},
+				Ports: []corev1.ContainerPort{{
+					Name:          "health",
+					ContainerPort: HealthPort,
+				}},
+				VolumeMounts: []corev1.VolumeMount{{
+					Name:      "tailscale-state",
+					MountPath: "/var/lib/tailscale",
+				}},
+				ReadinessProbe: &corev1.Probe{
+					ProbeHandler: corev1.ProbeHandler{
+						HTTPGet: &corev1.HTTPGetAction{
+							Path: "/healthz",
+							Port: intstr.FromInt(HealthPort),
+						},
+					},
+					InitialDelaySeconds: 2,
+					PeriodSeconds:       5,
+				},
+				LivenessProbe: &corev1.Probe{
+					ProbeHandler: corev1.ProbeHandler{
+						HTTPGet: &corev1.HTTPGetAction{
+							Path: "/healthz",
+							Port: intstr.FromInt(HealthPort),
+						},
+					},
+					InitialDelaySeconds: 10,
+					PeriodSeconds:       10,
+				},
+			}},
+			Volumes: []corev1.Volume{{
+				Name: "tailscale-state",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
 			}},
 		},
 	}
 }
 
-// StatefulSet returns a kernel-networking subnet router with persistent
-// Kubernetes Secret state. The auth key itself is injected into the state
-// Secret and removed by containerboot after successful registration.
-func StatefulSet(connector *kodiakv1alpha1.Connector, image, loginURL string, replicas int32) *appsv1.StatefulSet {
-	names := ChildNames(connector.Name)
-	extraArgs := []string{
-		"--snat-subnet-routes=true",
-		"--stateful-filtering=true",
+func safeName(value string, max int) string {
+	value = strings.ToLower(value)
+	if len(value) <= max {
+		return strings.Trim(value, "-")
 	}
-	if loginURL != "" {
-		extraArgs = append(extraArgs, "--login-server="+loginURL)
-	}
-	if len(connector.Spec.Tags) != 0 {
-		tags := append([]string(nil), connector.Spec.Tags...)
-		sort.Strings(tags)
-		extraArgs = append(extraArgs, "--advertise-tags="+strings.Join(tags, ","))
-	}
-
-	env := []corev1.EnvVar{
-		{
-			Name: "POD_NAME",
-			ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
-			},
-		},
-		{
-			Name: "POD_UID",
-			ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"},
-			},
-		},
-		{Name: "TS_KUBE_SECRET", Value: "$(POD_NAME)"},
-		{Name: "TS_USERSPACE", Value: "false"},
-		{Name: "TS_AUTH_ONCE", Value: "true"},
-		{Name: "TS_ACCEPT_DNS", Value: "false"},
-		{Name: "TS_HOSTNAME", Value: "$(POD_NAME)"},
-		{Name: "TS_ROUTES", Value: strings.Join(connector.Spec.SubnetRouter.AdvertiseRoutes, ",")},
-		{Name: "TS_EXTRA_ARGS", Value: strings.Join(extraArgs, " ")},
-		{Name: "TS_ENABLE_HEALTH_CHECK", Value: "true"},
-		{Name: "TS_LOCAL_ADDR_PORT", Value: fmt.Sprintf("[::]:%d", HealthPort)},
-		{Name: "TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", Value: "true"},
-	}
-
-	privileged := ptr.To(true)
-	podLabels := PodLabels(connector)
-	annotations := make(map[string]string, len(connector.Spec.Workload.Metadata.Annotations))
-	for key, value := range connector.Spec.Workload.Metadata.Annotations {
-		annotations[key] = value
-	}
-
-	return &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      names.StatefulSet,
-			Namespace: connector.Namespace,
-			Labels:    SelectorLabels(connector),
-		},
-		Spec: appsv1.StatefulSetSpec{
-			Replicas:            ptr.To(replicas),
-			ServiceName:         names.Service,
-			PodManagementPolicy: appsv1.ParallelPodManagement,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: SelectorLabels(connector),
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels:      podLabels,
-					Annotations: annotations,
-				},
-				Spec: corev1.PodSpec{
-					ServiceAccountName: names.ServiceAccount,
-					NodeSelector:       connector.Spec.Workload.NodeSelector,
-					Tolerations:        connector.Spec.Workload.Tolerations,
-					Affinity:           connector.Spec.Workload.Affinity,
-					InitContainers: []corev1.Container{{
-						Name:            "sysctler",
-						Image:           image,
-						ImagePullPolicy: corev1.PullIfNotPresent,
-						Command:         []string{"/bin/sh", "-c"},
-						Args: []string{
-							"sysctl -w net.ipv4.ip_forward=1 && if sysctl net.ipv6.conf.all.forwarding; then sysctl -w net.ipv6.conf.all.forwarding=1; fi",
-						},
-						SecurityContext: &corev1.SecurityContext{Privileged: privileged},
-					}},
-					Containers: []corev1.Container{{
-						Name:            "tailscale",
-						Image:           image,
-						ImagePullPolicy: corev1.PullIfNotPresent,
-						Env:             env,
-						Resources:       connector.Spec.Workload.Resources,
-						SecurityContext: &corev1.SecurityContext{Privileged: privileged},
-						Ports: []corev1.ContainerPort{{
-							Name:          "health",
-							ContainerPort: HealthPort,
-						}},
-						ReadinessProbe: &corev1.Probe{
-							ProbeHandler: corev1.ProbeHandler{
-								HTTPGet: &corev1.HTTPGetAction{
-									Path: "/healthz",
-									Port: intstrFromInt(HealthPort),
-								},
-							},
-							InitialDelaySeconds: 2,
-							PeriodSeconds:       5,
-						},
-						LivenessProbe: &corev1.Probe{
-							ProbeHandler: corev1.ProbeHandler{
-								HTTPGet: &corev1.HTTPGetAction{
-									Path: "/healthz",
-									Port: intstrFromInt(HealthPort),
-								},
-							},
-							InitialDelaySeconds: 10,
-							PeriodSeconds:       10,
-						},
-					}},
-				},
-			},
-		},
-	}
-}
-
-func intstrFromInt(value int) intstr.IntOrString {
-	return intstr.FromInt(value)
+	sum := sha256.Sum256([]byte(value))
+	suffix := fmt.Sprintf("-%x", sum[:4])
+	return strings.TrimRight(value[:max-len(suffix)], "-") + suffix
 }

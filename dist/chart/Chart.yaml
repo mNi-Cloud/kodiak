@@ -1,9 +1,9 @@
 apiVersion: v2
 name: kodiak
-description: Kubernetes operator for stable Tailscale subnet-router workloads
+description: Kubernetes operator for replaceable Tailscale subnet-router services
 type: application
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.2.1
+appVersion: "0.2.1"
 keywords:
   - kubernetes
   - operator

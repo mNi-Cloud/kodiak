@@ -12,7 +12,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	pb "github.com/jsiebens/ionscale/pkg/gen/ionscale/v1"
@@ -21,48 +20,45 @@ import (
 	tsworkload "github.com/mNi-Cloud/kodiak/internal/tailscale/workload"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"tailscale.com/kube/kubetypes"
 )
 
-var _ = Describe("Connector controller", func() {
+var _ = Describe("Connector controllers", func() {
 	ctx := context.Background()
 
-	reconcileTwice := func(reconciler *ConnectorReconciler, key types.NamespacedName) {
-		for range 2 {
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
-			Expect(err).NotTo(HaveOccurred())
+	cleanup := func(key types.NamespacedName) {
+		var instances kodiakv1alpha1.ConnectorInstanceList
+		_ = k8sClient.List(ctx, &instances, client.InNamespace(key.Namespace),
+			client.MatchingLabels{tsworkload.LabelConnector: tsworkload.ConnectorLabelValue(key.Name)})
+		for i := range instances.Items {
+			instances.Items[i].Finalizers = nil
+			_ = k8sClient.Update(ctx, &instances.Items[i])
+			_ = k8sClient.Delete(ctx, &instances.Items[i])
 		}
-	}
-
-	cleanupConnector := func(key types.NamespacedName) {
 		resource := &kodiakv1alpha1.Connector{}
 		if k8sClient.Get(ctx, key, resource) == nil {
 			resource.Finalizers = nil
-			Expect(k8sClient.Update(ctx, resource)).To(Succeed())
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			_ = k8sClient.Update(ctx, resource)
+			_ = k8sClient.Delete(ctx, resource)
 		}
 	}
 
-	It("creates a kernel-networking StatefulSet with per-replica state", func() {
+	It("creates replaceable instances without copying an external auth key", func() {
 		key := types.NamespacedName{Namespace: "default", Name: "external-connector"}
-		defer cleanupConnector(key)
-
+		defer cleanup(key)
 		externalKey := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "external-auth", Namespace: key.Namespace},
 			Data:       map[string][]byte{"TS_AUTH_KEY": []byte("tskey-auth-external")},
 		}
 		Expect(k8sClient.Create(ctx, externalKey)).To(Succeed())
 		defer func() { _ = k8sClient.Delete(ctx, externalKey) }()
-
-		resource := &kodiakv1alpha1.Connector{
+		connector := &kodiakv1alpha1.Connector{
 			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
 			Spec: kodiakv1alpha1.ConnectorSpec{
 				AuthKeySecretRef: &corev1.SecretKeySelector{
@@ -76,53 +72,33 @@ var _ = Describe("Connector controller", func() {
 				},
 			},
 		}
-		Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-
+		Expect(k8sClient.Create(ctx, connector)).To(Succeed())
 		reconciler := &ConnectorReconciler{
-			Client:         k8sClient,
-			Scheme:         k8sClient.Scheme(),
+			Client: k8sClient, Scheme: k8sClient.Scheme(),
 			TailscaleImage: "tailscale/tailscale:v1.98.9",
 		}
-		reconcileTwice(reconciler, key)
-
-		var statefulSet appsv1.StatefulSet
-		names := tsworkload.ChildNames(resource.Name)
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: key.Namespace, Name: names.StatefulSet}, &statefulSet)).To(Succeed())
-		Expect(statefulSet.Spec.Replicas).To(HaveValue(Equal(int32(2))))
-		Expect(statefulSet.Spec.Template.Spec.Containers).To(HaveLen(1))
-		Expect(statefulSet.Spec.Template.Spec.Containers[0].ImagePullPolicy).To(Equal(corev1.PullIfNotPresent))
-		Expect(statefulSet.Spec.Template.Spec.Containers[0].SecurityContext.Privileged).To(HaveValue(BeTrue()))
-		Expect(envValue(statefulSet.Spec.Template.Spec.Containers[0].Env, "TS_USERSPACE")).To(Equal("false"))
-		Expect(envValue(statefulSet.Spec.Template.Spec.Containers[0].Env, "TS_ROUTES")).To(Equal("10.0.0.0/24"))
-
-		for ordinal := int32(0); ordinal < 2; ordinal++ {
-			var state corev1.Secret
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Namespace: key.Namespace,
-				Name:      tsworkload.StateSecretName(resource.Name, ordinal),
-			}, &state)).To(Succeed())
-			Expect(string(state.Data[stateSecretAuthKey])).To(Equal("tskey-auth-external"))
+		for range 4 {
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
 		}
 
-		var current kodiakv1alpha1.Connector
-		Expect(k8sClient.Get(ctx, key, &current)).To(Succeed())
-		current.Spec.Replicas = ptr.To[int32](1)
-		Expect(k8sClient.Update(ctx, &current)).To(Succeed())
-		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
-		Expect(err).NotTo(HaveOccurred())
-
-		var removed corev1.Secret
-		err = k8sClient.Get(ctx, types.NamespacedName{
-			Namespace: key.Namespace,
-			Name:      tsworkload.StateSecretName(resource.Name, 1),
-		}, &removed)
-		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		var instances kodiakv1alpha1.ConnectorInstanceList
+		Expect(k8sClient.List(ctx, &instances, client.InNamespace(key.Namespace),
+			client.MatchingLabels{tsworkload.LabelConnector: tsworkload.ConnectorLabelValue(key.Name)})).To(Succeed())
+		Expect(instances.Items).To(HaveLen(2))
+		for _, instance := range instances.Items {
+			Expect(instance.Spec.AuthKeySecretRef).NotTo(BeNil())
+			Expect(instance.Spec.AuthKeySecretRef.Name).To(Equal(externalKey.Name))
+		}
+		var secrets corev1.SecretList
+		Expect(k8sClient.List(ctx, &secrets, client.InNamespace(key.Namespace),
+			client.MatchingLabels{tsworkload.LabelConnector: tsworkload.ConnectorLabelValue(key.Name)})).To(Succeed())
+		Expect(secrets.Items).To(BeEmpty())
 	})
 
-	It("uses internal bootstrap credentials and only observes managed route approval", func() {
+	It("uses an ephemeral managed bootstrap key and removes it after registration", func() {
 		key := types.NamespacedName{Namespace: "default", Name: "managed-connector"}
-		defer cleanupConnector(key)
-
+		defer cleanup(key)
 		tailnet := &kodiakv1alpha1.Tailnet{
 			ObjectMeta: metav1.ObjectMeta{Name: "managed-tailnet", Namespace: key.Namespace},
 			Spec:       kodiakv1alpha1.TailnetSpec{Name: "managed-tailnet"},
@@ -136,11 +112,8 @@ var _ = Describe("Connector controller", func() {
 		tailnet.Status.TailnetID = "17"
 		tailnet.Status.LoginURL = "https://vpn.example.test"
 		tailnet.Status.Conditions = []metav1.Condition{{
-			Type:               kodiakv1alpha1.TailnetConditionReady,
-			Status:             metav1.ConditionTrue,
-			Reason:             "Ready",
-			ObservedGeneration: tailnet.Generation,
-			LastTransitionTime: metav1.Now(),
+			Type: kodiakv1alpha1.TailnetConditionReady, Status: metav1.ConditionTrue,
+			Reason: "Ready", ObservedGeneration: tailnet.Generation, LastTransitionTime: metav1.Now(),
 		}}
 		Expect(k8sClient.Status().Update(ctx, tailnet)).To(Succeed())
 
@@ -148,19 +121,7 @@ var _ = Describe("Connector controller", func() {
 		mock.CreateAuthKeyFunc = func(context.Context, uint64, bool, time.Duration, []string, bool) (*pb.AuthKey, string, error) {
 			return &pb.AuthKey{Id: 71}, "tskey-auth-bootstrap", nil
 		}
-		mock.ListMachinesFunc = func(context.Context, uint64) ([]*pb.Machine, error) {
-			return []*pb.Machine{{
-				Id:               91,
-				Name:             tsworkload.StateSecretName(key.Name, 0),
-				Ipv4:             "100.64.0.10",
-				Authorized:       true,
-				Connected:        true,
-				AdvertisedRoutes: []string{"10.1.0.0/24"},
-				EnabledRoutes:    []string{"10.1.0.0/24"},
-			}}, nil
-		}
-
-		resource := &kodiakv1alpha1.Connector{
+		connector := &kodiakv1alpha1.Connector{
 			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
 			Spec: kodiakv1alpha1.ConnectorSpec{
 				TailnetRef: &corev1.LocalObjectReference{Name: tailnet.Name},
@@ -170,56 +131,54 @@ var _ = Describe("Connector controller", func() {
 				},
 			},
 		}
-		Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-		reconciler := &ConnectorReconciler{
-			Client:           k8sClient,
-			Scheme:           k8sClient.Scheme(),
-			ClientFactory:    controlclient.NewMockClientFactory(mock),
-			IonscaleEndpoint: "https://api.example.test",
-			IonscaleAdminKey: "admin",
+		Expect(k8sClient.Create(ctx, connector)).To(Succeed())
+		parent := &ConnectorReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(),
+			IonscaleEndpoint: "https://api.example.test", IonscaleAdminKey: "admin",
 		}
-		reconcileTwice(reconciler, key)
-
+		for range 3 {
+			_, err := parent.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+		}
+		var instances kodiakv1alpha1.ConnectorInstanceList
+		Expect(k8sClient.List(ctx, &instances, client.InNamespace(key.Namespace),
+			client.MatchingLabels{tsworkload.LabelConnector: tsworkload.ConnectorLabelValue(key.Name)})).To(Succeed())
+		Expect(instances.Items).To(HaveLen(1))
+		instanceKey := client.ObjectKeyFromObject(&instances.Items[0])
+		instanceController := &ConnectorInstanceReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(),
+			ClientFactory:    controlclient.NewMockClientFactory(mock),
+			IonscaleEndpoint: "https://api.example.test", IonscaleAdminKey: "admin",
+		}
+		for range 4 {
+			_, err := instanceController.Reconcile(ctx, reconcile.Request{NamespacedName: instanceKey})
+			Expect(err).NotTo(HaveOccurred())
+		}
 		Expect(mock.CreateAuthKeyCalls).To(HaveLen(1))
-		Expect(mock.CreateAuthKeyCalls[0].TailnetID).To(Equal(uint64(17)))
+		Expect(mock.CreateAuthKeyCalls[0].Ephemeral).To(BeTrue())
 		Expect(mock.CreateAuthKeyCalls[0].Expiry).To(Equal(bootstrapKeyExpiry))
-		Expect(mock.CreateAuthKeyCalls[0].PreAuthorized).To(BeTrue())
 
-		stateName := tsworkload.StateSecretName(key.Name, 0)
-		var state corev1.Secret
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: key.Namespace, Name: stateName}, &state)).To(Succeed())
-		ips, err := json.Marshal([]string{"100.64.0.10"})
-		Expect(err).NotTo(HaveOccurred())
-		delete(state.Data, stateSecretAuthKey)
-		state.Data[kubetypes.KeyDeviceID] = []byte("node-key")
-		state.Data[kubetypes.KeyDeviceIPs] = ips
-		Expect(k8sClient.Update(ctx, &state)).To(Succeed())
-
-		var statefulSet appsv1.StatefulSet
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: key.Namespace, Name: tsworkload.ChildNames(key.Name).StatefulSet}, &statefulSet)).To(Succeed())
-		statefulSet.Status.Replicas = 1
-		statefulSet.Status.CurrentReplicas = 1
-		statefulSet.Status.ReadyReplicas = 1
-		Expect(k8sClient.Status().Update(ctx, &statefulSet)).To(Succeed())
-
-		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
-		Expect(err).NotTo(HaveOccurred())
+		var pod corev1.Pod
+		Expect(k8sClient.Get(ctx, instanceKey, &pod)).To(Succeed())
+		Expect(pod.Spec.AutomountServiceAccountToken).To(HaveValue(BeFalse()))
+		pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+		Expect(k8sClient.Status().Update(ctx, &pod)).To(Succeed())
+		var instance kodiakv1alpha1.ConnectorInstance
+		Expect(k8sClient.Get(ctx, instanceKey, &instance)).To(Succeed())
+		mock.ListMachinesFunc = func(context.Context, uint64) ([]*pb.Machine, error) {
+			return []*pb.Machine{{
+				Id: 91, Name: instance.Status.RequestedHostname, Ipv4: "100.64.0.10",
+				Authorized: true, Connected: true,
+				AdvertisedRoutes: []string{"10.1.0.0/24"}, EnabledRoutes: []string{"10.1.0.0/24"},
+			}}, nil
+		}
+		for range 3 {
+			_, err := instanceController.Reconcile(ctx, reconcile.Request{NamespacedName: instanceKey})
+			Expect(err).NotTo(HaveOccurred())
+		}
 		Expect(mock.DeleteAuthKeyCalls).To(ContainElement(uint64(71)))
-
-		var updated kodiakv1alpha1.Connector
-		Expect(k8sClient.Get(ctx, key, &updated)).To(Succeed())
-		Expect(meta.IsStatusConditionTrue(updated.Status.Conditions, kodiakv1alpha1.ConnectorConditionReady)).To(BeTrue())
-		Expect(updated.Status.Devices).To(HaveLen(1))
-		Expect(updated.Status.Devices[0].MachineID).To(Equal("91"))
-		Expect(updated.Status.Devices[0].EnabledRoutes).To(Equal([]string{"10.1.0.0/24"}))
+		Expect(k8sClient.Get(ctx, instanceKey, &instance)).To(Succeed())
+		Expect(meta.IsStatusConditionTrue(instance.Status.Conditions, kodiakv1alpha1.ConnectorInstanceConditionReady)).To(BeTrue())
+		Expect(instance.Status.Device.MachineID).To(Equal("91"))
 	})
 })
-
-func envValue(values []corev1.EnvVar, name string) string {
-	for _, value := range values {
-		if value.Name == name {
-			return value.Value
-		}
-	}
-	return ""
-}

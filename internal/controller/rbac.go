@@ -20,10 +20,7 @@ package controller
 // a full permission set into a read-only dependency permission for the same
 // resource.
 
-// +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets;authkeys;connectors,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets/status;authkeys/status;connectors/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets/finalizers;authkeys/finalizers;connectors/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=secrets;services;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets;authkeys;connectors;connectorinstances,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets/status;authkeys/status;connectors/status;connectorinstances/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets/finalizers;authkeys/finalizers;connectors/finalizers;connectorinstances/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=pods;secrets,verbs=get;list;watch;create;update;patch;delete

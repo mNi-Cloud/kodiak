@@ -1,6 +1,6 @@
 # Kodiak
 
-Kodiak is a Kubernetes operator for stable Tailscale subnet-router workloads.
+Kodiak is a Kubernetes operator for logical Tailscale subnet-router services.
 It can use either:
 
 - an existing Tailscale-compatible control plane and auth-key Secret; or
@@ -11,16 +11,18 @@ Kodiak does not install Ionscale, a DERP server, or cert-manager.
 
 ## API
 
-- `Connector` creates a kernel-networking `StatefulSet`. Every replica has a
-  stable Pod name and a dedicated Kubernetes Secret containing containerboot
-  state. Kodiak advertises routes but never approves them.
+- `Connector` defines a logical subnet-router service. Every replica slot is
+  fulfilled by a replaceable `ConnectorInstance` and a direct kernel-networking
+  Pod. Kodiak advertises routes but never approves them.
+- `ConnectorInstance` is an internal lifecycle record for one Pod incarnation
+  and its external device. It does not contain tailscaled private state.
 - `Tailnet` manages Ionscale Tailnet policy, DNS, and feature settings.
 - `AuthKey` issues user/manual enrollment credentials for a managed Tailnet.
   Connectors do not depend on `AuthKey` resources.
 
-Managed Connectors use a `tailnetRef`. Kodiak creates a short-lived,
-pre-authorized bootstrap credential for each replica, waits for containerboot
-to persist the device identity, then revokes the bootstrap credential. Route
+Managed Connectors use a `tailnetRef`. Kodiak creates a short-lived, ephemeral,
+pre-authorized bootstrap credential for each new instance, records the
+registered device, then revokes and deletes the bootstrap credential. Route
 approval belongs in the Tailnet ACL `autoApprovers` policy.
 
 External Connectors use an `authKeySecretRef`. If `loginURL` is omitted, the
@@ -51,7 +53,7 @@ For Kustomize development installs:
 
 ```sh
 make install
-make deploy IMG=ghcr.io/mni-cloud/kodiak:0.2.0
+make deploy IMG=ghcr.io/mni-cloud/kodiak:0.2.1
 ```
 
 Patch `IONSCALE_API_ENDPOINT`, `IONSCALE_LOGIN_URL`, and the optional
@@ -107,9 +109,14 @@ Kodiak exposes advertised and enabled routes separately in
 ## Security boundary
 
 Kodiak never calls the Ionscale route-enable API; `autoApprovers` is the only
-managed route-approval authority. Connector bootstrap keys stay in
-controller-owned replica State Secrets and are revoked after identity is
-persisted.
+managed route-approval authority. Managed bootstrap keys are transient
+controller-owned Secrets and are revoked after the external device is
+recorded.
+
+Connector Pods use the stock Tailscale image with an `emptyDir` state
+directory. They do not receive a service-account token or Kubernetes API
+credentials. A Pod replacement intentionally creates a new external device;
+Kodiak brings it to readiness before deleting the previous instance.
 
 Ionscale must also enforce that tags requested during registration are a
 subset of the tags carried by the auth key. Until that control-plane check is
