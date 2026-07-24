@@ -129,7 +129,9 @@ spec:
 		}).Should(Succeed())
 		output, err = utils.Run(exec.Command(
 			"kubectl", "get", "pod", instanceName, "-n", "default",
-			"-o", "jsonpath={.spec.automountServiceAccountToken}:{.spec.containers[0].env[?(@.name=='TS_KUBE_SECRET')].value}:{.spec.volumes[?(@.name=='tailscale-state')].emptyDir}",
+			"-o", "jsonpath={.spec.automountServiceAccountToken}:"+
+				"{.spec.containers[0].env[?(@.name=='TS_KUBE_SECRET')].value}:"+
+				"{.spec.volumes[?(@.name=='tailscale-state')].emptyDir}",
 		))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(output).To(Equal("false::{}"))
