@@ -67,7 +67,7 @@ For Kustomize development installs:
 
 ```sh
 make install
-make deploy IMG=ghcr.io/mni-cloud/kodiak:0.2.3
+make deploy IMG=ghcr.io/mni-cloud/kodiak:0.2.4
 ```
 
 Patch `IONSCALE_API_ENDPOINT`, `IONSCALE_LOGIN_URL`, and the optional

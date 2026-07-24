@@ -28,13 +28,14 @@ func TestConnectorPodContract(t *testing.T) {
 			UID:       types.UID("12345678-1234-1234-1234-123456789abc"),
 		},
 		Spec: kodiakv1alpha1.ConnectorInstanceSpec{
-			ConnectorRef:    corev1.LocalObjectReference{Name: "vpn"},
-			Slot:            0,
-			Revision:        "0123456789abcdef",
-			LoginURL:        "https://vpn.example.test",
-			Tags:            []string{"tag:vpn"},
-			AdvertiseRoutes: []string{"10.0.1.0/24"},
-			Image:           "tailscale/tailscale:v1.98.9",
+			ConnectorRef:     corev1.LocalObjectReference{Name: "vpn"},
+			Slot:             0,
+			Revision:         "0123456789abcdef",
+			LoginURL:         "https://vpn.example.test",
+			ManagedTailnetID: "17",
+			Tags:             []string{"tag:vpn"},
+			AdvertiseRoutes:  []string{"10.0.1.0/24"},
+			Image:            "tailscale/tailscale:v1.98.9",
 		},
 	}
 
@@ -64,6 +65,18 @@ func TestConnectorPodContract(t *testing.T) {
 	if container.Env[0].ValueFrom == nil || container.Env[0].ValueFrom.SecretKeyRef == nil ||
 		container.Env[0].ValueFrom.SecretKeyRef.Name != "bootstrap" {
 		t.Fatal("TS_AUTHKEY does not reference the bootstrap Secret")
+	}
+	if container.Env[0].ValueFrom.SecretKeyRef.Optional == nil ||
+		!*container.Env[0].ValueFrom.SecretKeyRef.Optional {
+		t.Fatal("managed bootstrap Secret reference must be optional after registration")
+	}
+	if container.ReadinessProbe == nil || container.ReadinessProbe.Exec == nil ||
+		!strings.Contains(strings.Join(container.ReadinessProbe.Exec.Command, " "), "127.0.0.1:9002/healthz") {
+		t.Fatal("readiness probe must check the Pod-local health endpoint")
+	}
+	if container.LivenessProbe == nil || container.LivenessProbe.Exec == nil ||
+		!strings.Contains(strings.Join(container.LivenessProbe.Exec.Command, " "), "127.0.0.1:9002/healthz") {
+		t.Fatal("liveness probe must check the Pod-local health endpoint")
 	}
 	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].EmptyDir == nil {
 		t.Fatal("tailscaled state must use an emptyDir scoped to the Pod")

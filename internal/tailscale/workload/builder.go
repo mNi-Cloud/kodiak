@@ -27,7 +27,6 @@ import (
 	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 )
 
@@ -113,6 +112,12 @@ func Pod(instance *kodiakv1alpha1.ConnectorInstance, authSecretName, authSecretK
 	}
 
 	privileged := ptr.To(true)
+	authKeyOptional := ptr.To(instance.Spec.ManagedTailnetID != "")
+	healthCommand := []string{
+		"/bin/sh",
+		"-c",
+		fmt.Sprintf("wget -q -O /dev/null http://127.0.0.1:%d/healthz", HealthPort),
+	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        instance.Name,
@@ -146,6 +151,7 @@ func Pod(instance *kodiakv1alpha1.ConnectorInstance, authSecretName, authSecretK
 							SecretKeyRef: &corev1.SecretKeySelector{
 								LocalObjectReference: corev1.LocalObjectReference{Name: authSecretName},
 								Key:                  authSecretKey,
+								Optional:             authKeyOptional,
 							},
 						},
 					},
@@ -173,20 +179,14 @@ func Pod(instance *kodiakv1alpha1.ConnectorInstance, authSecretName, authSecretK
 				}},
 				ReadinessProbe: &corev1.Probe{
 					ProbeHandler: corev1.ProbeHandler{
-						HTTPGet: &corev1.HTTPGetAction{
-							Path: "/healthz",
-							Port: intstr.FromInt(HealthPort),
-						},
+						Exec: &corev1.ExecAction{Command: healthCommand},
 					},
 					InitialDelaySeconds: 2,
 					PeriodSeconds:       5,
 				},
 				LivenessProbe: &corev1.Probe{
 					ProbeHandler: corev1.ProbeHandler{
-						HTTPGet: &corev1.HTTPGetAction{
-							Path: "/healthz",
-							Port: intstr.FromInt(HealthPort),
-						},
+						Exec: &corev1.ExecAction{Command: healthCommand},
 					},
 					InitialDelaySeconds: 10,
 					PeriodSeconds:       10,
