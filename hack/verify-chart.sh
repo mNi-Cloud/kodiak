@@ -6,7 +6,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
 
-for resource in authkeys connectors tailnets; do
+for resource in authkeys connectorinstances connectors tailnets; do
   source_file="${repo_root}/config/crd/bases/kodiak.mnicloud.jp_${resource}.yaml"
   chart_file="${repo_root}/dist/chart/templates/crd/kodiak.mnicloud.jp_${resource}.yaml"
   rendered_body="${tmp_dir}/${resource}.yaml"

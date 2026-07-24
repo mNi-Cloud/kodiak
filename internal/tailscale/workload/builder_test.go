@@ -14,44 +14,46 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
 	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
-func TestConnectorWorkloadContract(t *testing.T) {
-	connector := &kodiakv1alpha1.Connector{
-		ObjectMeta: metav1.ObjectMeta{Name: "vpn", Namespace: "tenant-a"},
-		Spec: kodiakv1alpha1.ConnectorSpec{
-			Tags: []string{"tag:vpn"},
-			SubnetRouter: kodiakv1alpha1.SubnetRouterSpec{
-				AdvertiseRoutes: []string{"10.0.1.0/24"},
-			},
+func TestConnectorPodContract(t *testing.T) {
+	instance := &kodiakv1alpha1.ConnectorInstance{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vpn-0-abcd",
+			Namespace: "tenant-a",
+			UID:       types.UID("12345678-1234-1234-1234-123456789abc"),
+		},
+		Spec: kodiakv1alpha1.ConnectorInstanceSpec{
+			ConnectorRef:    corev1.LocalObjectReference{Name: "vpn"},
+			Slot:            0,
+			Revision:        "0123456789abcdef",
+			LoginURL:        "https://vpn.example.test",
+			Tags:            []string{"tag:vpn"},
+			AdvertiseRoutes: []string{"10.0.1.0/24"},
+			Image:           "tailscale/tailscale:v1.98.9",
 		},
 	}
 
-	role := Role(connector, 2)
-	if diff := cmp.Diff(
-		[]string{"vpn-connector-0", "vpn-connector-1"},
-		role.Rules[0].ResourceNames,
-	); diff != "" {
-		t.Fatalf("state Secret RBAC mismatch (-want +got):\n%s", diff)
+	pod := Pod(instance, "bootstrap", "TS_AUTH_KEY")
+	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
+		t.Fatal("Connector Pod must not mount a service-account token")
 	}
-
-	workload := StatefulSet(connector, "tailscale/tailscale:v1.98.9", "https://vpn.example.test", 2)
-	if workload.Spec.ServiceName != "vpn-connector" {
-		t.Fatalf("unexpected headless service name %q", workload.Spec.ServiceName)
+	if pod.Spec.ServiceAccountName != "" {
+		t.Fatalf("unexpected serviceAccountName %q", pod.Spec.ServiceAccountName)
 	}
-	if workload.Spec.Replicas == nil || *workload.Spec.Replicas != 2 {
-		t.Fatalf("unexpected replicas: %v", workload.Spec.Replicas)
+	if pod.Spec.Containers[0].ImagePullPolicy != corev1.PullIfNotPresent {
+		t.Fatalf("imagePullPolicy=%q, want IfNotPresent", pod.Spec.Containers[0].ImagePullPolicy)
 	}
-	container := workload.Spec.Template.Spec.Containers[0]
-	if got := workloadEnv(container.Env, "TS_USERSPACE"); got != "false" {
-		t.Fatalf("TS_USERSPACE=%q, want false", got)
+	container := pod.Spec.Containers[0]
+	if got := workloadEnv(container.Env, "TS_KUBE_SECRET"); got != "" {
+		t.Fatalf("TS_KUBE_SECRET=%q, want empty", got)
 	}
-	if got := workloadEnv(container.Env, "TS_KUBE_SECRET"); got != "$(POD_NAME)" {
-		t.Fatalf("TS_KUBE_SECRET=%q", got)
+	if got := workloadEnv(container.Env, "TS_STATE_DIR"); got != "/var/lib/tailscale" {
+		t.Fatalf("TS_STATE_DIR=%q", got)
 	}
 	if got := workloadEnv(container.Env, "TS_ROUTES"); got != "10.0.1.0/24" {
 		t.Fatalf("TS_ROUTES=%q", got)
@@ -59,20 +61,27 @@ func TestConnectorWorkloadContract(t *testing.T) {
 	if got := workloadEnv(container.Env, "TS_EXTRA_ARGS"); got != "--snat-subnet-routes=true --stateful-filtering=true --login-server=https://vpn.example.test --advertise-tags=tag:vpn" {
 		t.Fatalf("TS_EXTRA_ARGS=%q", got)
 	}
+	if container.Env[0].ValueFrom == nil || container.Env[0].ValueFrom.SecretKeyRef == nil ||
+		container.Env[0].ValueFrom.SecretKeyRef.Name != "bootstrap" {
+		t.Fatal("TS_AUTHKEY does not reference the bootstrap Secret")
+	}
+	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].EmptyDir == nil {
+		t.Fatal("tailscaled state must use an emptyDir scoped to the Pod")
+	}
 }
 
-func TestChildNamesAreStableDNSLabels(t *testing.T) {
+func TestNamesAreStableDNSLabels(t *testing.T) {
 	name := strings.Repeat("connector-", 20)
-	first := ChildNames(name)
-	second := ChildNames(name)
+	first := ConnectorLabelValue(name)
+	second := ConnectorLabelValue(name)
 	if first != second {
-		t.Fatalf("child names are not stable: %#v != %#v", first, second)
+		t.Fatalf("connector label is not stable: %q != %q", first, second)
 	}
-	if len(first.StatefulSet) > 52 {
-		t.Fatalf("StatefulSet base name length %d exceeds 52", len(first.StatefulSet))
+	if len(first) > 63 {
+		t.Fatalf("connector label length %d exceeds 63", len(first))
 	}
-	if got := ConnectorLabelValue(name); got != first.StatefulSet {
-		t.Fatalf("connector label %q != child identity %q", got, first.StatefulSet)
+	if got := InstanceGenerateName(name, 4); len(got) > 58 || got[len(got)-1] != '-' {
+		t.Fatalf("invalid GenerateName %q", got)
 	}
 }
 

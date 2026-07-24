@@ -25,6 +25,10 @@ spec:
     spec:
       serviceAccountName: {{ include "kodiak.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10
+      {{- with .Values.controllerManager.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         seccompProfile:

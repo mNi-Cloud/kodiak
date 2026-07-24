@@ -14,6 +14,15 @@ resources:
   controller: true
   domain: mnicloud.jp
   group: kodiak
+  kind: ConnectorInstance
+  path: github.com/mNi-Cloud/kodiak/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: mnicloud.jp
+  group: kodiak
   kind: Connector
   path: github.com/mNi-Cloud/kodiak/api/v1alpha1
   version: v1alpha1

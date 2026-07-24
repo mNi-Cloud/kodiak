@@ -164,6 +164,17 @@ func main() {
 		setupLog.Error(err, "set up Connector controller")
 		os.Exit(1)
 	}
+	if err := (&controller.ConnectorInstanceReconciler{
+		Client:           manager.GetClient(),
+		Scheme:           manager.GetScheme(),
+		ClientFactory:    clientFactory,
+		IonscaleEndpoint: ionscaleAPIEndpoint,
+		IonscaleAdminKey: ionscaleAdminKey,
+		IonscaleSkipTLS:  ionscaleSkipTLS,
+	}).SetupWithManager(manager); err != nil {
+		setupLog.Error(err, "set up ConnectorInstance controller")
+		os.Exit(1)
+	}
 
 	if err := manager.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "add health check")
