@@ -457,8 +457,6 @@ func stringSlicesEqual(a, b []string) bool {
 	return true
 }
 
-
-
 // ionscaleConfig represents the ionscale configuration structure
 type ionscaleConfig struct {
 	PublicAddr string `json:"public_addr" yaml:"public_addr"`

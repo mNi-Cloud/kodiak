@@ -283,38 +283,48 @@ var _ = Describe("Manager", Ordered, func() {
 
 		It("should provisioned cert-manager", func() {
 			By("validating that cert-manager has the certificate Secret")
-			verifyCertManager := func(g Gomega) {
+			verifyCertManager := func() error {
 				cmd := exec.Command("kubectl", "get", "secrets", "webhook-server-cert", "-n", namespace)
 				_, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
+				return err
 			}
 			Eventually(verifyCertManager).Should(Succeed())
 		})
 
 		It("should have CA injection for mutating webhooks", func() {
 			By("checking CA injection for mutating webhooks")
-			verifyCAInjection := func(g Gomega) {
+			verifyCAInjection := func() error {
 				cmd := exec.Command("kubectl", "get",
 					"mutatingwebhookconfigurations.admissionregistration.k8s.io",
 					"kodiak-mutating-webhook-configuration",
 					"-o", "go-template={{ range .webhooks }}{{ .clientConfig.caBundle }}{{ end }}")
 				mwhOutput, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(len(mwhOutput)).To(BeNumerically(">", 10))
+				if err != nil {
+					return err
+				}
+				if len(mwhOutput) <= 10 {
+					return fmt.Errorf("mutating webhook CA bundle is not populated")
+				}
+				return nil
 			}
 			Eventually(verifyCAInjection).Should(Succeed())
 		})
 
 		It("should have CA injection for validating webhooks", func() {
 			By("checking CA injection for validating webhooks")
-			verifyCAInjection := func(g Gomega) {
+			verifyCAInjection := func() error {
 				cmd := exec.Command("kubectl", "get",
 					"validatingwebhookconfigurations.admissionregistration.k8s.io",
 					"kodiak-validating-webhook-configuration",
 					"-o", "go-template={{ range .webhooks }}{{ .clientConfig.caBundle }}{{ end }}")
 				vwhOutput, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(len(vwhOutput)).To(BeNumerically(">", 10))
+				if err != nil {
+					return err
+				}
+				if len(vwhOutput) <= 10 {
+					return fmt.Errorf("validating webhook CA bundle is not populated")
+				}
+				return nil
 			}
 			Eventually(verifyCAInjection).Should(Succeed())
 		})
