@@ -19,29 +19,25 @@ package controller
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
+	"strconv"
 	"time"
 
 	pb "github.com/jsiebens/ionscale/pkg/gen/ionscale/v1"
 	controlclient "github.com/mNi-Cloud/kodiak/internal/client"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/yaml"
 
 	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
 )
 
 const (
-	tailnetConditionReady           = "Ready"
 	reasonConfigurationMissing      = "ConfigurationMissing"
 	reasonTailnetCreated            = "TailnetCreated"
 	reasonTailnetUpdated            = "TailnetUpdated"
@@ -60,14 +56,10 @@ type TailnetReconciler struct {
 	Scheme           *runtime.Scheme
 	ClientFactory    controlclient.ClientFactory
 	IonscaleEndpoint string
+	IonscaleLoginURL string
 	IonscaleAdminKey string
 	IonscaleSkipTLS  bool
 }
-
-// +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=tailnets/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
 func (r *TailnetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("tailnet", req.NamespacedName)
@@ -88,10 +80,10 @@ func (r *TailnetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return result, err
 	}
 
-	if r.IonscaleEndpoint == "" || r.IonscaleAdminKey == "" {
+	if r.IonscaleEndpoint == "" || r.IonscaleLoginURL == "" || r.IonscaleAdminKey == "" {
 		logger.Error(nil, "ionscale configuration not provided")
 		if err := r.setPendingStatus(ctx, &tailnet, reasonConfigurationMissing,
-			"ionscale endpoint or admin key not configured"); err != nil {
+			"Ionscale API endpoint, login URL, or admin key is not configured"); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: missingDependencyRequeue}, nil
@@ -159,11 +151,34 @@ func (r *TailnetReconciler) handleDeletion(ctx context.Context, resource *kodiak
 
 	logger := log.FromContext(ctx).WithValues("tailnet", resource.Name)
 
-	if resource.Status.TailnetID != 0 && r.IonscaleEndpoint != "" && r.IonscaleAdminKey != "" {
-		if err := r.deleteRemoteTailnet(ctx, resource.Status.TailnetID); err != nil {
-			logger.Error(err, "failed to delete tailnet from control server, will retry")
+	var connectors kodiakv1alpha1.ConnectorList
+	if err := r.List(ctx, &connectors, client.InNamespace(resource.Namespace)); err != nil {
+		return ctrl.Result{}, err
+	}
+	for i := range connectors.Items {
+		ref := connectors.Items[i].Spec.TailnetRef
+		if ref != nil && ref.Name == resource.Name {
+			logger.Info("waiting for dependent Connector deletion", "connector", connectors.Items[i].Name)
 			return ctrl.Result{RequeueAfter: finalizerCleanupRetryRequeue}, nil
 		}
+	}
+	var authKeys kodiakv1alpha1.AuthKeyList
+	if err := r.List(ctx, &authKeys, client.InNamespace(resource.Namespace)); err != nil {
+		return ctrl.Result{}, err
+	}
+	for i := range authKeys.Items {
+		if authKeys.Items[i].Spec.TailnetRef.Name == resource.Name {
+			logger.Info("waiting for dependent AuthKey deletion", "authKey", authKeys.Items[i].Name)
+			return ctrl.Result{RequeueAfter: finalizerCleanupRetryRequeue}, nil
+		}
+	}
+
+	if r.IonscaleEndpoint == "" || r.IonscaleAdminKey == "" {
+		return ctrl.Result{RequeueAfter: finalizerCleanupRetryRequeue}, nil
+	}
+	if err := r.deleteRemoteTailnet(ctx, resource); err != nil {
+		logger.Error(err, "failed to delete tailnet from control server, will retry")
+		return ctrl.Result{RequeueAfter: finalizerCleanupRetryRequeue}, nil
 	}
 
 	controllerutil.RemoveFinalizer(resource, kodiakFinalizer)
@@ -173,31 +188,40 @@ func (r *TailnetReconciler) handleDeletion(ctx context.Context, resource *kodiak
 	return ctrl.Result{}, nil
 }
 
-func (r *TailnetReconciler) deleteRemoteTailnet(ctx context.Context, tailnetID uint64) error {
-	logger := log.FromContext(ctx)
-
+func (r *TailnetReconciler) deleteRemoteTailnet(ctx context.Context, resource *kodiakv1alpha1.Tailnet) error {
 	clientFactory := r.ClientFactory
 	if clientFactory == nil {
 		clientFactory = controlclient.DefaultClientFactory()
 	}
 	ctrlClient, err := clientFactory(r.IonscaleEndpoint, r.IonscaleAdminKey, r.IonscaleSkipTLS)
 	if err != nil {
-		// If we can't create a client (e.g., DNS resolution failure), log warning and proceed
-		if isConnectUnavailable(err) {
-			logger.Info("control server unavailable during tailnet deletion, proceeding with resource cleanup", "error", err)
-			return nil
-		}
 		return fmt.Errorf("failed to create control server client for deletion: %w", err)
 	}
 
+	var tailnetID uint64
+	if resource.Status.TailnetID != "" {
+		tailnetID, err = strconv.ParseUint(resource.Status.TailnetID, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid status.tailnetID %q: %w", resource.Status.TailnetID, err)
+		}
+	} else {
+		tailnets, err := ctrlClient.ListTailnets(ctx)
+		if err != nil {
+			return fmt.Errorf("list tailnets for deletion: %w", err)
+		}
+		for _, remote := range tailnets {
+			if remote.GetName() == resource.Spec.Name {
+				tailnetID = remote.GetId()
+				break
+			}
+		}
+	}
+	if tailnetID == 0 {
+		return nil
+	}
 	if err := ctrlClient.DeleteTailnet(ctx, tailnetID, true); err != nil {
 		if isConnectNotFound(err) {
 			// Already deleted on remote, proceed
-			return nil
-		}
-		if isConnectUnavailable(err) {
-			// Control server unreachable, log warning and proceed with resource cleanup
-			logger.Info("control server unavailable during tailnet deletion, proceeding with resource cleanup", "error", err)
 			return nil
 		}
 		return fmt.Errorf("failed to delete tailnet %d: %w", tailnetID, err)
@@ -210,7 +234,14 @@ func (r *TailnetReconciler) syncTailnet(ctx context.Context, resource *kodiakv1a
 	createReq := buildCreateTailnetRequest(resource.Spec, dnsConfig)
 
 	var remote *pb.Tailnet
-	tailnetID := resource.Status.TailnetID
+	var tailnetID uint64
+	if resource.Status.TailnetID != "" {
+		parsed, err := strconv.ParseUint(resource.Status.TailnetID, 10, 64)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("invalid status.tailnetID %q: %w", resource.Status.TailnetID, err)
+		}
+		tailnetID = parsed
+	}
 
 	if tailnetID != 0 {
 		t, err := client.GetTailnet(ctx, tailnetID)
@@ -259,41 +290,32 @@ func (r *TailnetReconciler) syncTailnet(ctx context.Context, resource *kodiakv1a
 	return remote, reasonTailnetSynced, "Tailnet configuration already up to date", nil
 }
 
-func (r *TailnetReconciler) fetchMachineCount(ctx context.Context, client controlclient.ControlServerClientInterface, tailnetID uint64) (int, error) {
+func (r *TailnetReconciler) fetchMachineCount(ctx context.Context, client controlclient.ControlServerClientInterface, tailnetID uint64) (int32, error) {
 	machines, err := client.ListMachines(ctx, tailnetID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to list machines for tailnet %d: %w", tailnetID, err)
 	}
-	return len(machines), nil
+	return int32(len(machines)), nil
 }
 
-func (r *TailnetReconciler) setReadyStatus(ctx context.Context, resource *kodiakv1alpha1.Tailnet, tailnetID uint64, machineCount int, reason, message string) error {
+func (r *TailnetReconciler) setReadyStatus(ctx context.Context, resource *kodiakv1alpha1.Tailnet, tailnetID uint64, machineCount int32, reason, message string) error {
 	current := resource.DeepCopy()
-	logger := log.FromContext(ctx)
 
 	now := metav1.Now()
 	upsertCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               tailnetConditionReady,
+		Type:               kodiakv1alpha1.TailnetConditionReady,
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: resource.Generation,
 		LastTransitionTime: now,
 		Reason:             reason,
 		Message:            message,
 	})
-	resource.Status.Ready = true
-	resource.Status.Phase = "Ready"
-	resource.Status.TailnetID = tailnetID
+	resource.Status.ObservedGeneration = resource.Generation
+	resource.Status.TailnetID = strconv.FormatUint(tailnetID, 10)
+	resource.Status.LoginURL = r.IonscaleLoginURL
 	resource.Status.MachineCount = machineCount
 	syncTime := metav1.NewTime(time.Now().UTC())
 	resource.Status.LastSyncTime = &syncTime
-
-	// Set ControlServerUrl from ionscale-config ConfigMap
-	publicAddr, err := r.getIonscalePublicAddr(ctx)
-	if err != nil {
-		logger.Error(err, "failed to get ionscale public address, ControlServerUrl will be empty")
-	} else {
-		resource.Status.ControlServerUrl = publicAddr
-	}
 
 	if equality.Semantic.DeepEqual(current.Status, resource.Status) {
 		return nil
@@ -306,15 +328,14 @@ func (r *TailnetReconciler) setPendingStatus(ctx context.Context, resource *kodi
 
 	now := metav1.Now()
 	upsertCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               tailnetConditionReady,
+		Type:               kodiakv1alpha1.TailnetConditionReady,
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: resource.Generation,
 		LastTransitionTime: now,
 		Reason:             reason,
 		Message:            message,
 	})
-	resource.Status.Ready = false
-	resource.Status.Phase = "Pending"
+	resource.Status.ObservedGeneration = resource.Generation
 
 	if equality.Semantic.DeepEqual(current.Status, resource.Status) {
 		return nil
@@ -331,15 +352,14 @@ func (r *TailnetReconciler) setErrorStatus(ctx context.Context, resource *kodiak
 		message = reconcileErr.Error()
 	}
 	upsertCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               tailnetConditionReady,
+		Type:               kodiakv1alpha1.TailnetConditionReady,
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: resource.Generation,
 		LastTransitionTime: now,
 		Reason:             reason,
 		Message:            message,
 	})
-	resource.Status.Ready = false
-	resource.Status.Phase = "Error"
+	resource.Status.ObservedGeneration = resource.Generation
 
 	if equality.Semantic.DeepEqual(current.Status, resource.Status) {
 		return nil
@@ -455,49 +475,4 @@ func stringSlicesEqual(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-
-
-// ionscaleConfig represents the ionscale configuration structure
-type ionscaleConfig struct {
-	PublicAddr string `json:"public_addr" yaml:"public_addr"`
-}
-
-// getIonscalePublicAddr reads the public_addr from ionscale-config ConfigMap
-func (r *TailnetReconciler) getIonscalePublicAddr(ctx context.Context) (string, error) {
-	namespace := os.Getenv("POD_NAMESPACE")
-	if namespace == "" {
-		namespace = "kodiak-system"
-	}
-
-	// ConfigMap name can be customized via environment variable (for kustomize namePrefix)
-	configMapName := os.Getenv("IONSCALE_CONFIG_NAME")
-	if configMapName == "" {
-		configMapName = "ionscale-config"
-	}
-
-	var cm corev1.ConfigMap
-	if err := r.Get(ctx, types.NamespacedName{
-		Namespace: namespace,
-		Name:      configMapName,
-	}, &cm); err != nil {
-		return "", fmt.Errorf("failed to get %s ConfigMap: %w", configMapName, err)
-	}
-
-	configData, ok := cm.Data["config.yaml"]
-	if !ok {
-		return "", fmt.Errorf("config.yaml not found in ionscale-config ConfigMap")
-	}
-
-	var config ionscaleConfig
-	if err := yaml.Unmarshal([]byte(configData), &config); err != nil {
-		return "", fmt.Errorf("failed to parse ionscale config: %w", err)
-	}
-
-	if config.PublicAddr == "" {
-		return "", fmt.Errorf("public_addr not configured in ionscale-config")
-	}
-
-	return config.PublicAddr, nil
 }

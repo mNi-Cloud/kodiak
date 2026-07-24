@@ -1,9 +1,9 @@
 apiVersion: v2
 name: kodiak
-description: A Helm chart for Kodiak - Kubernetes operator for ionscale/Tailscale VPN management
+description: Kubernetes operator for stable Tailscale subnet-router workloads
 type: application
-version: 0.1.16
-appVersion: "0.1.16"
+version: 0.2.0
+appVersion: "0.2.0"
 keywords:
   - kubernetes
   - operator

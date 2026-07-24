@@ -5,6 +5,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
+    {{- if .Values.crd.keep }}
+    helm.sh/resource-policy: keep
+    {{- end }}
   name: authkeys.kodiak.mnicloud.jp
 spec:
   group: kodiak.mnicloud.jp
@@ -12,28 +15,19 @@ spec:
     kind: AuthKey
     listKind: AuthKeyList
     plural: authkeys
+    shortNames:
+    - kauthkey
     singular: authkey
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: Auth key ready status
-      jsonPath: .status.ready
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: READY
-      type: boolean
-    - description: Tailnet reference
-      jsonPath: .spec.tailnetRef.name
+      type: string
+    - jsonPath: .spec.tailnetRef.name
       name: TAILNET
       type: string
-    - description: Ephemeral key
-      jsonPath: .spec.ephemeral
-      name: EPHEMERAL
-      type: boolean
-    - description: Pre-authorized
-      jsonPath: .spec.preAuthorized
-      name: PREAUTH
-      type: boolean
-    - description: Expiration time
-      jsonPath: .status.expiresAt
+    - jsonPath: .status.expiresAt
       name: EXPIRES
       type: date
     - jsonPath: .metadata.creationTimestamp
@@ -42,7 +36,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: AuthKey is the Schema for the authkeys API
+        description: AuthKey is the Schema for enrollment credentials.
         properties:
           apiVersion:
             description: |-
@@ -62,33 +56,60 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of AuthKey
+            description: |-
+              AuthKeySpec requests an Ionscale enrollment credential.
+              AuthKey is intended for user or manually managed device enrollment. Kodiak
+              Connectors use controller-owned bootstrap credentials instead.
             properties:
               ephemeral:
                 default: false
-                description: Ephemeral determines if machines authenticated with this
-                  key are ephemeral
+                description: Ephemeral makes machines registered with this key ephemeral.
                 type: boolean
+                x-kubernetes-validations:
+                - message: ephemeral is immutable; change rotationNonce to issue a
+                    new key
+                  rule: self == oldSelf
               expiry:
-                description: Expiry duration for the auth key (e.g., "24h", "7d")
+                description: Expiry is the lifetime of newly issued keys. Zero uses
+                  the control-plane default.
                 type: string
+                x-kubernetes-validations:
+                - message: expiry is immutable; change rotationNonce to issue a new
+                    key
+                  rule: self == oldSelf
               preAuthorized:
                 default: false
-                description: PreAuthorized determines if machines are automatically
-                  authorized
+                description: PreAuthorized authorizes machines immediately after registration.
                 type: boolean
-              secretName:
-                description: SecretName to store the generated auth key (defaults
-                  to authkey-<name>)
+                x-kubernetes-validations:
+                - message: preAuthorized is immutable; change rotationNonce to issue
+                    a new key
+                  rule: self == oldSelf
+              rotationNonce:
+                description: RotationNonce requests replacement when its value changes.
+                maxLength: 128
                 type: string
+              secretName:
+                description: SecretName is the Secret that receives TS_AUTH_KEY.
+                type: string
+                x-kubernetes-validations:
+                - message: secretName is immutable
+                  rule: self == oldSelf
               tags:
-                description: Tags to apply to machines authenticated with this key
+                description: Tags are fixed at issuance.
                 items:
+                  pattern: ^tag:[a-zA-Z0-9][a-zA-Z0-9-]*$
                   type: string
+                maxItems: 16
+                minItems: 1
                 type: array
+                x-kubernetes-list-type: set
+                x-kubernetes-validations:
+                - message: tags are immutable; change rotationNonce to issue a new
+                    key
+                  rule: self == oldSelf
               tailnetRef:
-                description: TailnetRef references the Tailnet this auth key belongs
-                  to
+                description: TailnetRef references the managed Tailnet.
                 properties:
                   name:
                     default: ""
@@ -101,15 +122,18 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+                x-kubernetes-validations:
+                - message: tailnetRef is immutable
+                  rule: self == oldSelf
             required:
+            - tags
             - tailnetRef
             type: object
           status:
-            description: status defines the observed state of AuthKey
+            description: AuthKeyStatus is the observed state of an issued credential.
             properties:
               conditions:
-                description: conditions represent the current state of the AuthKey
-                  resource.
+                description: Conditions contains the canonical readiness state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -169,25 +193,31 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               createdAt:
-                description: CreatedAt is when the key was created
+                description: CreatedAt is the remote creation time.
                 format: date-time
                 type: string
               expiresAt:
-                description: ExpiresAt is when the key expires
+                description: ExpiresAt is the remote expiration time.
                 format: date-time
                 type: string
-              keyId:
-                description: KeyID is the ID assigned by the control server
+              issuedRotationNonce:
+                description: IssuedRotationNonce is the nonce associated with the
+                  current key.
+                type: string
+              keyID:
+                description: KeyID is represented as a string to preserve uint64 values
+                  in JSON clients.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation reconciled.
                 format: int64
                 type: integer
-              phase:
-                description: Phase represents the current phase of the auth key
+              retiringKeyID:
+                description: RetiringKeyID is an old remote key pending deletion after
+                  rotation.
                 type: string
-              ready:
-                description: Ready indicates if the auth key is ready for use
-                type: boolean
               secretRef:
-                description: SecretRef references the secret containing the auth key
+                description: SecretRef references the Secret containing TS_AUTH_KEY.
                 properties:
                   name:
                     default: ""

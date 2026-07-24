@@ -21,145 +21,187 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+const (
+	ConnectorConditionReady             = "Ready"
+	ConnectorConditionWorkloadReady     = "WorkloadReady"
+	ConnectorConditionIdentityReady     = "IdentityReady"
+	ConnectorConditionControlPlaneReady = "ControlPlaneReady"
+	ConnectorConditionRoutesReady       = "RoutesReady"
+)
 
-// ResourceList defines resource quantities
-type ResourceList struct {
-	// +optional
-	CPU string `json:"cpu,omitempty"`
-
-	// +optional
-	Memory string `json:"memory,omitempty"`
-}
-
-// ResourceRequirements defines resource requirements for the container
-type ResourceRequirements struct {
-	// +optional
-	Limits ResourceList `json:"limits,omitempty"`
-
-	// +optional
-	Requests ResourceList `json:"requests,omitempty"`
-}
-
-// ConnectorSpec defines the desired state of Connector.
+// ConnectorSpec describes a kernel-networking Tailscale subnet router.
+//
+// A managed Connector references a Kodiak Tailnet. Kodiak creates short-lived
+// bootstrap credentials for each replica and observes the corresponding
+// Ionscale machines. An externally managed Connector references an existing
+// auth-key Secret and can optionally set a custom login URL.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.tailnetRef) != has(self.authKeySecretRef)",message="exactly one of tailnetRef or authKeySecretRef must be specified"
+// +kubebuilder:validation:XValidation:rule="!has(self.tailnetRef) || !has(self.loginURL)",message="loginURL is derived from Tailnet when tailnetRef is specified"
+// +kubebuilder:validation:XValidation:rule="!has(self.tailnetRef) || size(self.tags) > 0",message="managed Connectors must specify at least one tag"
 type ConnectorSpec struct {
+	// TailnetRef selects a Kodiak-managed Tailnet.
 	// +optional
-	// List of resources this object depends on
-	DependsOn []metav1.GroupVersionKind `json:"dependsOn,omitempty" patchStrategy:"merge" patchMergeKey:"kind"`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="tailnetRef is immutable"
+	TailnetRef *corev1.LocalObjectReference `json:"tailnetRef,omitempty"`
 
+	// AuthKeySecretRef selects an externally managed bootstrap auth key.
+	// The referenced key defaults to TS_AUTH_KEY.
 	// +optional
-	// Metadata for the resource
-	Metadata *ResourceMetadata `json:"metadata,omitempty"`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="authKeySecretRef is immutable"
+	AuthKeySecretRef *corev1.SecretKeySelector `json:"authKeySecretRef,omitempty"`
 
+	// LoginURL is the control-plane URL for an externally managed Connector.
+	// Empty uses the Tailscale client default.
 	// +optional
-	// Specification of the connector
-	Spec ConnectorSpecSpec `json:"spec,omitempty"`
+	// +kubebuilder:validation:Pattern=`^https://[^[:space:]]+$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="loginURL is immutable"
+	LoginURL string `json:"loginURL,omitempty"`
+
+	// Tags are advertised by every Connector replica. Managed Connectors use
+	// the same tags on their internally generated bootstrap credentials.
+	// +optional
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:Pattern=`^tag:[a-zA-Z0-9][a-zA-Z0-9-]*$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="tags are immutable"
+	Tags []string `json:"tags,omitempty"`
+
+	// Replicas is the number of independent subnet-router devices.
+	// +optional
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=5
+	Replicas *int32 `json:"replicas,omitempty"`
+
+	// SubnetRouter defines the routes advertised by the Connector.
+	// +required
+	SubnetRouter SubnetRouterSpec `json:"subnetRouter"`
+
+	// Workload customizes the generated StatefulSet without exposing
+	// Tailscale implementation flags.
+	// +optional
+	Workload ConnectorWorkloadSpec `json:"workload,omitempty"`
 }
 
-// ResourceMetadata contains metadata for the resource
-type ResourceMetadata struct {
+// SubnetRouterSpec is the provider-neutral subnet routing contract.
+type SubnetRouterSpec struct {
+	// AdvertiseRoutes is the canonical CIDR set advertised by each replica.
+	// Route approval remains a control-plane policy concern.
+	// +required
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MaxLength=49
+	// +kubebuilder:validation:XValidation:rule="self.all(r, isCIDR(r) && r == string(cidr(r).masked()))",message="advertiseRoutes must contain canonical CIDRs"
+	AdvertiseRoutes []string `json:"advertiseRoutes"`
+}
+
+// ConnectorWorkloadSpec contains standard Kubernetes workload overrides.
+type ConnectorWorkloadSpec struct {
+	// Metadata is applied to the generated Pods. Kodiak does not interpret
+	// provider-specific annotations.
 	// +optional
-	// Labels to apply to deployments and pods
+	Metadata ConnectorPodMetadata `json:"metadata,omitempty"`
+
+	// Resources configures the tailscale container.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// NodeSelector constrains Connector placement.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations are applied to Connector Pods.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// Affinity is applied to Connector Pods.
+	// +optional
+	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+}
+
+// ConnectorPodMetadata is metadata propagated to Connector Pods.
+type ConnectorPodMetadata struct {
+	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
 
 	// +optional
-	// Annotations to apply to pods
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-type ConnectorSpecSpec struct {
-	// +optional
-	// Tailscale configuration
-	Tailscale TailscaleConfig `json:"tailscale,omitempty"`
-
-	// +optional
-	// Resource requirements for the Tailscale container
-	Resources ResourceRequirements `json:"resources,omitempty"`
-}
-
-type TailscaleConfig struct {
-	// +optional
-	// Auth key used for Tailscale authentication (mutually exclusive with AuthKeyRef)
-	AuthKey string `json:"authKey,omitempty"`
-
-	// +optional
-	// AuthKeySecretRef references an existing secret containing TS_AUTH_KEY (mutually exclusive with AuthKey and AuthKeyRef)
-	AuthKeySecretRef *corev1.SecretKeySelector `json:"authKeySecretRef,omitempty"`
-
-	// +optional
-	// AuthKeyRef references an AuthKey resource to use for authentication
-	AuthKeyRef *corev1.LocalObjectReference `json:"authKeyRef,omitempty"`
-
-	// +kubebuilder:default="stable"
-	// +optional
-	// Tailscale image tag/version to use
-	Version string `json:"version,omitempty"`
-
-	// +optional
-	// List of networks to advertise
-	AdvertiseRoutes []string `json:"advertiseRoutes,omitempty"`
-
-	// +kubebuilder:default=true
-	// +optional
-	// Enable USERSPACE networking mode
-	UserspaceNetworking bool `json:"userspaceNetworking,omitempty"`
-
-	// +optional
-	// Hostname to use for the tailscale node
-	Hostname string `json:"hostname,omitempty"`
-
-	// +kubebuilder:default=false
-	// +optional
-	// Accept DNS configuration from the Tailscale network
-	AcceptDNS bool `json:"acceptDns,omitempty"`
-
-	// +optional
-	// URL for custom Tailscale control server. If not specified, uses the controller's default ionscale endpoint
-	ControlServerUrl string `json:"controlServerUrl,omitempty"`
-}
-
-// ConnectorStatus defines the observed state of Connector.
+// ConnectorStatus reports workload, identity, and managed control-plane state.
 type ConnectorStatus struct {
+	// ObservedGeneration is the most recent generation reconciled.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// ManagedTailnetID records the Ionscale Tailnet used for exact cleanup.
+	// +optional
+	ManagedTailnetID string `json:"managedTailnetID,omitempty"`
+
+	// Devices reports one stable identity per desired replica.
+	// +optional
+	// +listType=map
+	// +listMapKey=ordinal
+	Devices []ConnectorDeviceStatus `json:"devices,omitempty"`
+
+	// Conditions contains the canonical readiness state.
+	// +optional
 	// +listType=map
 	// +listMapKey=type
-	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
 
-	// +optional
-	// The Tailscale node ID if connected
-	NodeID string `json:"nodeId,omitempty"`
+// ConnectorDeviceStatus is the observed state for one StatefulSet ordinal.
+type ConnectorDeviceStatus struct {
+	// Ordinal identifies the StatefulSet replica.
+	Ordinal int32 `json:"ordinal"`
 
+	// DeviceID is the stable Tailscale node ID written by containerboot.
 	// +optional
-	// The Tailscale IP address assigned to the node
-	TailscaleIP string `json:"tailscaleIp,omitempty"`
+	DeviceID string `json:"deviceID,omitempty"`
 
+	// MachineID is the Ionscale machine ID for a managed Connector.
 	// +optional
-	// The advertised routes that are actually being advertised
+	MachineID string `json:"machineID,omitempty"`
+
+	// Hostname is the control-plane device hostname.
+	// +optional
+	Hostname string `json:"hostname,omitempty"`
+
+	// TailnetIPs are the assigned Tailscale addresses.
+	// +optional
+	TailnetIPs []string `json:"tailnetIPs,omitempty"`
+
+	// Connected is reported only when the managed control plane provides it.
+	// +optional
+	Connected *bool `json:"connected,omitempty"`
+
+	// AdvertisedRoutes are observed from the managed control plane.
+	// +optional
 	AdvertisedRoutes []string `json:"advertisedRoutes,omitempty"`
+
+	// EnabledRoutes are routes approved by control-plane policy.
+	// +optional
+	EnabledRoutes []string `json:"enabledRoutes,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="STATUS",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The status of the connector"
-// +kubebuilder:printcolumn:name="TAILSCALE-IP",type="string",JSONPath=".status.tailscaleIp",description="Assigned Tailscale IP"
-// +kubebuilder:printcolumn:name="NODE-ID",type="string",JSONPath=".status.nodeId",description="Tailscale node ID"
-// +kubebuilder:printcolumn:name="ROUTES",type="string",JSONPath=".status.advertisedRoutes",description="Advertised routes"
+// +kubebuilder:resource:shortName={"kconnector"}
+// +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="REPLICAS",type="integer",JSONPath=".spec.replicas"
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 
-// Connector is the Schema for the connectors API.
+// Connector is the Schema for subnet-router Connectors.
 type Connector struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ConnectorSpec   `json:"spec,omitempty"`
+	Spec   ConnectorSpec   `json:"spec"`
 	Status ConnectorStatus `json:"status,omitempty"`
 }
-
-const (
-	ConnectorStatusAvailable string = "Available"
-	ConnectorStatusDegraded  string = "Degraded"
-)
 
 // +kubebuilder:object:root=true
 

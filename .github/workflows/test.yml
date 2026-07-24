@@ -1,23 +1,61 @@
-name: Tests
+name: Quality
 
 on:
-  push:
   pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
-    name: Run on Ubuntu
-    runs-on: ubuntu-latest
+  quality:
+    name: ${{ matrix.check }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        check:
+          - test
+          - lint
+          - generated-artifacts
+
     steps:
-      - name: Clone the code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
 
-      - name: Running Tests
+      - name: Run tests
+        if: matrix.check == 'test'
+        run: make test
+
+      - name: Run linter
+        if: matrix.check == 'lint'
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8
+
+      - name: Setup Helm
+        if: matrix.check == 'generated-artifacts'
+        uses: azure/setup-helm@v4
+
+      - name: Validate generated and packaged resources
+        if: matrix.check == 'generated-artifacts'
         run: |
-          go mod tidy
-          make test
+          make manifests generate
+          git diff --exit-code -- api config/crd config/rbac
+          hack/verify-chart.sh
+          make kustomize
+          bin/kustomize build config/default >/dev/null
+          bin/kustomize build config/samples >/dev/null
+          helm lint dist/chart

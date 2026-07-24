@@ -6,358 +6,220 @@ you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
     http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
 */
 
 package controller
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
+	pb "github.com/jsiebens/ionscale/pkg/gen/ionscale/v1"
+	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
+	controlclient "github.com/mNi-Cloud/kodiak/internal/client"
+	tsworkload "github.com/mNi-Cloud/kodiak/internal/tailscale/workload"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
+	"tailscale.com/kube/kubetypes"
 )
 
-var _ = Describe("Connector Controller", func() {
-	const (
-		timeout  = time.Second * 10
-		interval = time.Millisecond * 250
-	)
+var _ = Describe("Connector controller", func() {
+	ctx := context.Background()
 
-	Context("When reconciling a Connector resource", func() {
-		const connectorName = "test-connector"
+	reconcileTwice := func(reconciler *ConnectorReconciler, key types.NamespacedName) {
+		for range 2 {
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+		}
+	}
 
-		ctx := context.Background()
+	cleanupConnector := func(key types.NamespacedName) {
+		resource := &kodiakv1alpha1.Connector{}
+		if k8sClient.Get(ctx, key, resource) == nil {
+			resource.Finalizers = nil
+			Expect(k8sClient.Update(ctx, resource)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+		}
+	}
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      connectorName,
-			Namespace: "default",
+	It("creates a kernel-networking StatefulSet with per-replica state", func() {
+		key := types.NamespacedName{Namespace: "default", Name: "external-connector"}
+		defer cleanupConnector(key)
+
+		externalKey := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "external-auth", Namespace: key.Namespace},
+			Data:       map[string][]byte{"TS_AUTH_KEY": []byte("tskey-auth-external")},
+		}
+		Expect(k8sClient.Create(ctx, externalKey)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, externalKey) }()
+
+		resource := &kodiakv1alpha1.Connector{
+			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
+			Spec: kodiakv1alpha1.ConnectorSpec{
+				AuthKeySecretRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: externalKey.Name},
+					Key:                  "TS_AUTH_KEY",
+				},
+				LoginURL: "https://control.example.test",
+				Replicas: ptr.To[int32](2),
+				SubnetRouter: kodiakv1alpha1.SubnetRouterSpec{
+					AdvertiseRoutes: []string{"10.0.0.0/24"},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+		reconciler := &ConnectorReconciler{
+			Client:         k8sClient,
+			Scheme:         k8sClient.Scheme(),
+			TailscaleImage: "tailscale/tailscale:v1.98.9",
+		}
+		reconcileTwice(reconciler, key)
+
+		var statefulSet appsv1.StatefulSet
+		names := tsworkload.ChildNames(resource.Name)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: key.Namespace, Name: names.StatefulSet}, &statefulSet)).To(Succeed())
+		Expect(statefulSet.Spec.Replicas).To(HaveValue(Equal(int32(2))))
+		Expect(statefulSet.Spec.Template.Spec.Containers).To(HaveLen(1))
+		Expect(statefulSet.Spec.Template.Spec.Containers[0].ImagePullPolicy).To(Equal(corev1.PullIfNotPresent))
+		Expect(statefulSet.Spec.Template.Spec.Containers[0].SecurityContext.Privileged).To(HaveValue(BeTrue()))
+		Expect(envValue(statefulSet.Spec.Template.Spec.Containers[0].Env, "TS_USERSPACE")).To(Equal("false"))
+		Expect(envValue(statefulSet.Spec.Template.Spec.Containers[0].Env, "TS_ROUTES")).To(Equal("10.0.0.0/24"))
+
+		for ordinal := int32(0); ordinal < 2; ordinal++ {
+			var state corev1.Secret
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: key.Namespace,
+				Name:      tsworkload.StateSecretName(resource.Name, ordinal),
+			}, &state)).To(Succeed())
+			Expect(string(state.Data[stateSecretAuthKey])).To(Equal("tskey-auth-external"))
 		}
 
-		AfterEach(func() {
-			// Clean up Connector
-			connector := &kodiakv1alpha1.Connector{}
-			err := k8sClient.Get(ctx, typeNamespacedName, connector)
-			if err == nil {
-				// Remove finalizer for cleanup
-				connector.Finalizers = nil
-				_ = k8sClient.Update(ctx, connector)
-				Expect(k8sClient.Delete(ctx, connector)).To(Succeed())
-				Eventually(func() bool {
-					err := k8sClient.Get(ctx, typeNamespacedName, connector)
-					return errors.IsNotFound(err)
-				}, timeout, interval).Should(BeTrue())
-			}
+		var current kodiakv1alpha1.Connector
+		Expect(k8sClient.Get(ctx, key, &current)).To(Succeed())
+		current.Spec.Replicas = ptr.To[int32](1)
+		Expect(k8sClient.Update(ctx, &current)).To(Succeed())
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
 
-			// Clean up Deployment
-			deploy := &appsv1.Deployment{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: connectorName + "-ts-connector", Namespace: "default"}, deploy)
-			if err == nil {
-				_ = k8sClient.Delete(ctx, deploy)
-			}
+		var removed corev1.Secret
+		err = k8sClient.Get(ctx, types.NamespacedName{
+			Namespace: key.Namespace,
+			Name:      tsworkload.StateSecretName(resource.Name, 1),
+		}, &removed)
+		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	})
 
-			// Clean up Secrets
-			for _, secretName := range []string{"test-auth-secret"} {
-				secret := &corev1.Secret{}
-				err = k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: "default"}, secret)
-				if err == nil {
-					_ = k8sClient.Delete(ctx, secret)
-				}
-			}
-		})
+	It("uses internal bootstrap credentials and only observes managed route approval", func() {
+		key := types.NamespacedName{Namespace: "default", Name: "managed-connector"}
+		defer cleanupConnector(key)
 
-		It("should add finalizer to the resource", func() {
-			By("Creating a Connector resource")
-			connector := &kodiakv1alpha1.Connector{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      connectorName,
-					Namespace: "default",
+		tailnet := &kodiakv1alpha1.Tailnet{
+			ObjectMeta: metav1.ObjectMeta{Name: "managed-tailnet", Namespace: key.Namespace},
+			Spec:       kodiakv1alpha1.TailnetSpec{Name: "managed-tailnet"},
+		}
+		Expect(k8sClient.Create(ctx, tailnet)).To(Succeed())
+		defer func() {
+			tailnet.Finalizers = nil
+			_ = k8sClient.Update(ctx, tailnet)
+			_ = k8sClient.Delete(ctx, tailnet)
+		}()
+		tailnet.Status.TailnetID = "17"
+		tailnet.Status.LoginURL = "https://vpn.example.test"
+		tailnet.Status.Conditions = []metav1.Condition{{
+			Type:               kodiakv1alpha1.TailnetConditionReady,
+			Status:             metav1.ConditionTrue,
+			Reason:             "Ready",
+			ObservedGeneration: tailnet.Generation,
+			LastTransitionTime: metav1.Now(),
+		}}
+		Expect(k8sClient.Status().Update(ctx, tailnet)).To(Succeed())
+
+		mock := &controlclient.MockControlServerClient{}
+		mock.CreateAuthKeyFunc = func(context.Context, uint64, bool, time.Duration, []string, bool) (*pb.AuthKey, string, error) {
+			return &pb.AuthKey{Id: 71}, "tskey-auth-bootstrap", nil
+		}
+		mock.ListMachinesFunc = func(context.Context, uint64) ([]*pb.Machine, error) {
+			return []*pb.Machine{{
+				Id:               91,
+				Name:             tsworkload.StateSecretName(key.Name, 0),
+				Ipv4:             "100.64.0.10",
+				Authorized:       true,
+				Connected:        true,
+				AdvertisedRoutes: []string{"10.1.0.0/24"},
+				EnabledRoutes:    []string{"10.1.0.0/24"},
+			}}, nil
+		}
+
+		resource := &kodiakv1alpha1.Connector{
+			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
+			Spec: kodiakv1alpha1.ConnectorSpec{
+				TailnetRef: &corev1.LocalObjectReference{Name: tailnet.Name},
+				Tags:       []string{"tag:mni-vpn"},
+				SubnetRouter: kodiakv1alpha1.SubnetRouterSpec{
+					AdvertiseRoutes: []string{"10.1.0.0/24"},
 				},
-				Spec: kodiakv1alpha1.ConnectorSpec{
-					Spec: kodiakv1alpha1.ConnectorSpecSpec{
-						Tailscale: kodiakv1alpha1.TailscaleConfig{
-							AuthKey:          "test-key",
-							ControlServerUrl: "https://controlplane.example.com",
-						},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, connector)).To(Succeed())
+			},
+		}
+		Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+		reconciler := &ConnectorReconciler{
+			Client:           k8sClient,
+			Scheme:           k8sClient.Scheme(),
+			ClientFactory:    controlclient.NewMockClientFactory(mock),
+			IonscaleEndpoint: "https://api.example.test",
+			IonscaleAdminKey: "admin",
+		}
+		reconcileTwice(reconciler, key)
 
-			By("Reconciling the resource")
-			reconciler := &ConnectorReconciler{
-				Client:           k8sClient,
-				Scheme:           k8sClient.Scheme(),
-				IonscaleEndpoint: "http://ionscale.test.svc:8080",
-				IonscaleAdminKey: "test-admin-key",
-			}
+		Expect(mock.CreateAuthKeyCalls).To(HaveLen(1))
+		Expect(mock.CreateAuthKeyCalls[0].TailnetID).To(Equal(uint64(17)))
+		Expect(mock.CreateAuthKeyCalls[0].Expiry).To(Equal(bootstrapKeyExpiry))
+		Expect(mock.CreateAuthKeyCalls[0].PreAuthorized).To(BeTrue())
 
-			result, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeTrue())
+		stateName := tsworkload.StateSecretName(key.Name, 0)
+		var state corev1.Secret
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: key.Namespace, Name: stateName}, &state)).To(Succeed())
+		ips, err := json.Marshal([]string{"100.64.0.10"})
+		Expect(err).NotTo(HaveOccurred())
+		delete(state.Data, stateSecretAuthKey)
+		state.Data[kubetypes.KeyDeviceID] = []byte("node-key")
+		state.Data[kubetypes.KeyDeviceIPs] = ips
+		Expect(k8sClient.Update(ctx, &state)).To(Succeed())
 
-			By("Checking that finalizer was added")
-			updated := &kodiakv1alpha1.Connector{}
-			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
-			Expect(updated.Finalizers).To(ContainElement("kodiak.mnicloud.jp/finalizer"))
-		})
+		var statefulSet appsv1.StatefulSet
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: key.Namespace, Name: tsworkload.ChildNames(key.Name).StatefulSet}, &statefulSet)).To(Succeed())
+		statefulSet.Status.Replicas = 1
+		statefulSet.Status.CurrentReplicas = 1
+		statefulSet.Status.ReadyReplicas = 1
+		Expect(k8sClient.Status().Update(ctx, &statefulSet)).To(Succeed())
 
-		It("should create Deployment when auth key is provided via authKeySecretRef", func() {
-			By("Creating auth key secret")
-			authSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-auth-secret",
-					Namespace: "default",
-				},
-				Data: map[string][]byte{
-					"TS_AUTH_KEY": []byte("tskey-auth-abc123"),
-				},
-			}
-			Expect(k8sClient.Create(ctx, authSecret)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(mock.DeleteAuthKeyCalls).To(ContainElement(uint64(71)))
 
-			By("Creating a Connector with authKeySecretRef")
-			connector := &kodiakv1alpha1.Connector{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      connectorName,
-					Namespace: "default",
-				},
-				Spec: kodiakv1alpha1.ConnectorSpec{
-					Spec: kodiakv1alpha1.ConnectorSpecSpec{
-						Tailscale: kodiakv1alpha1.TailscaleConfig{
-							AuthKeySecretRef: &corev1.SecretKeySelector{
-								LocalObjectReference: corev1.LocalObjectReference{
-									Name: "test-auth-secret",
-								},
-								Key: "TS_AUTH_KEY",
-							},
-							ControlServerUrl: "https://controlplane.example.com",
-						},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, connector)).To(Succeed())
-
-			By("Reconciling the resource")
-			reconciler := &ConnectorReconciler{
-				Client:           k8sClient,
-				Scheme:           k8sClient.Scheme(),
-				IonscaleEndpoint: "http://ionscale.test.svc:8080",
-				IonscaleAdminKey: "test-admin-key",
-			}
-
-			// Multiple reconciles to add finalizer and create deployment
-			for i := 0; i < 3; i++ {
-				_, err := reconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
-				})
-				Expect(err).NotTo(HaveOccurred())
-			}
-
-			By("Checking that Deployment was created")
-			deploy := &appsv1.Deployment{}
-			Eventually(func() error {
-				return k8sClient.Get(ctx, types.NamespacedName{
-					Name:      connectorName + "-ts-connector",
-					Namespace: "default",
-				}, deploy)
-			}, timeout, interval).Should(Succeed())
-
-			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(1))
-			Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(ContainSubstring("tailscale/tailscale"))
-
-			// Check that env vars include auth key from secret
-			var authKeyEnv *corev1.EnvVar
-			for i := range deploy.Spec.Template.Spec.Containers[0].Env {
-				if deploy.Spec.Template.Spec.Containers[0].Env[i].Name == "TS_AUTH_KEY" {
-					authKeyEnv = &deploy.Spec.Template.Spec.Containers[0].Env[i]
-					break
-				}
-			}
-			Expect(authKeyEnv).NotTo(BeNil())
-			Expect(authKeyEnv.ValueFrom).NotTo(BeNil())
-			Expect(authKeyEnv.ValueFrom.SecretKeyRef.Name).To(Equal("test-auth-secret"))
-		})
-
-		It("should create Deployment with inline auth key", func() {
-			By("Creating a Connector with inline authKey")
-			connector := &kodiakv1alpha1.Connector{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      connectorName,
-					Namespace: "default",
-				},
-				Spec: kodiakv1alpha1.ConnectorSpec{
-					Spec: kodiakv1alpha1.ConnectorSpecSpec{
-						Tailscale: kodiakv1alpha1.TailscaleConfig{
-							AuthKey:          "tskey-auth-inline123",
-							ControlServerUrl: "https://controlplane.example.com",
-						},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, connector)).To(Succeed())
-
-			By("Reconciling the resource")
-			reconciler := &ConnectorReconciler{
-				Client:           k8sClient,
-				Scheme:           k8sClient.Scheme(),
-				IonscaleEndpoint: "http://ionscale.test.svc:8080",
-				IonscaleAdminKey: "test-admin-key",
-			}
-
-			// Multiple reconciles
-			for i := 0; i < 3; i++ {
-				_, err := reconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
-				})
-				Expect(err).NotTo(HaveOccurred())
-			}
-
-			By("Checking that Deployment was created with inline auth key")
-			deploy := &appsv1.Deployment{}
-			Eventually(func() error {
-				return k8sClient.Get(ctx, types.NamespacedName{
-					Name:      connectorName + "-ts-connector",
-					Namespace: "default",
-				}, deploy)
-			}, timeout, interval).Should(Succeed())
-
-			// Check that env vars include inline auth key
-			var authKeyEnv *corev1.EnvVar
-			for i := range deploy.Spec.Template.Spec.Containers[0].Env {
-				if deploy.Spec.Template.Spec.Containers[0].Env[i].Name == "TS_AUTH_KEY" {
-					authKeyEnv = &deploy.Spec.Template.Spec.Containers[0].Env[i]
-					break
-				}
-			}
-			Expect(authKeyEnv).NotTo(BeNil())
-			Expect(authKeyEnv.Value).To(Equal("tskey-auth-inline123"))
-		})
-
-		It("should configure advertised routes in Deployment", func() {
-			By("Creating a Connector with advertised routes")
-			connector := &kodiakv1alpha1.Connector{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      connectorName,
-					Namespace: "default",
-				},
-				Spec: kodiakv1alpha1.ConnectorSpec{
-					Spec: kodiakv1alpha1.ConnectorSpecSpec{
-						Tailscale: kodiakv1alpha1.TailscaleConfig{
-							AuthKey:          "test-key",
-							ControlServerUrl: "https://controlplane.example.com",
-							AdvertiseRoutes:  []string{"10.0.0.0/8", "192.168.0.0/16"},
-						},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, connector)).To(Succeed())
-
-			By("Reconciling the resource")
-			reconciler := &ConnectorReconciler{
-				Client:           k8sClient,
-				Scheme:           k8sClient.Scheme(),
-				IonscaleEndpoint: "http://ionscale.test.svc:8080",
-				IonscaleAdminKey: "test-admin-key",
-			}
-
-			// Multiple reconciles
-			for i := 0; i < 3; i++ {
-				_, err := reconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
-				})
-				Expect(err).NotTo(HaveOccurred())
-			}
-
-			By("Checking that Deployment has routes configured")
-			deploy := &appsv1.Deployment{}
-			Eventually(func() error {
-				return k8sClient.Get(ctx, types.NamespacedName{
-					Name:      connectorName + "-ts-connector",
-					Namespace: "default",
-				}, deploy)
-			}, timeout, interval).Should(Succeed())
-
-			// Check that env vars include TS_ROUTES
-			var routesEnv *corev1.EnvVar
-			for i := range deploy.Spec.Template.Spec.Containers[0].Env {
-				if deploy.Spec.Template.Spec.Containers[0].Env[i].Name == "TS_ROUTES" {
-					routesEnv = &deploy.Spec.Template.Spec.Containers[0].Env[i]
-					break
-				}
-			}
-			Expect(routesEnv).NotTo(BeNil())
-			Expect(routesEnv.Value).To(Equal("10.0.0.0/8,192.168.0.0/16"))
-		})
-
-		It("should use controller's ionscale endpoint when controlServerUrl is not specified", func() {
-			By("Creating a Connector without controlServerUrl")
-			connector := &kodiakv1alpha1.Connector{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      connectorName,
-					Namespace: "default",
-				},
-				Spec: kodiakv1alpha1.ConnectorSpec{
-					Spec: kodiakv1alpha1.ConnectorSpecSpec{
-						Tailscale: kodiakv1alpha1.TailscaleConfig{
-							AuthKey: "test-key",
-							// No ControlServerUrl specified - should use controller's default
-						},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, connector)).To(Succeed())
-
-			By("Reconciling the resource")
-			reconciler := &ConnectorReconciler{
-				Client:           k8sClient,
-				Scheme:           k8sClient.Scheme(),
-				IonscaleEndpoint: "http://ionscale.kodiak-system.svc:8080",
-				IonscaleAdminKey: "test-admin-key",
-			}
-
-			// Multiple reconciles
-			for i := 0; i < 3; i++ {
-				_, err := reconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
-				})
-				Expect(err).NotTo(HaveOccurred())
-			}
-
-			By("Checking that Deployment was created with login server from controller's ionscale endpoint")
-			deploy := &appsv1.Deployment{}
-			Eventually(func() error {
-				return k8sClient.Get(ctx, types.NamespacedName{
-					Name:      connectorName + "-ts-connector",
-					Namespace: "default",
-				}, deploy)
-			}, timeout, interval).Should(Succeed())
-
-			// Check that env vars include TS_EXTRA_ARGS with login server
-			var extraArgsEnv *corev1.EnvVar
-			for i := range deploy.Spec.Template.Spec.Containers[0].Env {
-				if deploy.Spec.Template.Spec.Containers[0].Env[i].Name == "TS_EXTRA_ARGS" {
-					extraArgsEnv = &deploy.Spec.Template.Spec.Containers[0].Env[i]
-					break
-				}
-			}
-			Expect(extraArgsEnv).NotTo(BeNil())
-			Expect(extraArgsEnv.Value).To(ContainSubstring("--login-server=http://ionscale.kodiak-system.svc:8080"))
-		})
+		var updated kodiakv1alpha1.Connector
+		Expect(k8sClient.Get(ctx, key, &updated)).To(Succeed())
+		Expect(meta.IsStatusConditionTrue(updated.Status.Conditions, kodiakv1alpha1.ConnectorConditionReady)).To(BeTrue())
+		Expect(updated.Status.Devices).To(HaveLen(1))
+		Expect(updated.Status.Devices[0].MachineID).To(Equal("91"))
+		Expect(updated.Status.Devices[0].EnabledRoutes).To(Equal([]string{"10.1.0.0/24"}))
 	})
 })
+
+func envValue(values []corev1.EnvVar, name string) string {
+	for _, value := range values {
+		if value.Name == name {
+			return value.Value
+		}
+	}
+	return ""
+}

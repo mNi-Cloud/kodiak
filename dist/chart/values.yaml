@@ -1,190 +1,40 @@
-# Kodiak Helm Chart Values
-# See https://github.com/mNi-Cloud/kodiak for documentation
-
-# =============================================================================
-# [MANAGER]: Controller Manager Deployment Configuration
-# =============================================================================
 controllerManager:
   replicas: 1
-
-  container:
-    image:
-      repository: ghcr.io/mni-cloud/kodiak
-      tag: "0.1.16"
-    args:
-      - "--leader-elect"
-      - "--metrics-bind-address=:8443"
-      - "--health-probe-bind-address=:8081"
-    resources:
-      limits:
-        cpu: 500m
-        memory: 128Mi
-      requests:
-        cpu: 10m
-        memory: 64Mi
-    livenessProbe:
-      initialDelaySeconds: 15
-      periodSeconds: 20
-      httpGet:
-        path: /healthz
-        port: 8081
-    readinessProbe:
-      initialDelaySeconds: 5
-      periodSeconds: 10
-      httpGet:
-        path: /readyz
-        port: 8081
-    securityContext:
-      allowPrivilegeEscalation: false
-      capabilities:
-        drop:
-          - "ALL"
-
-  pod:
-    labels: {}
-    annotations: {}
-
-  securityContext:
-    runAsNonRoot: true
-    seccompProfile:
-      type: RuntimeDefault
-
-  terminationGracePeriodSeconds: 10
-  serviceAccountName: kodiak-controller-manager
-
-# =============================================================================
-# [IONSCALE]: ionscale Control Server Configuration
-# =============================================================================
-ionscale:
-  # Enable ionscale deployment
-  enabled: true
-
   image:
-    repository: ghcr.io/jsiebens/ionscale
-    tag: "0.15.0"
-
-  replicas: 1
-
-  # Admin key for ionscale API access
-  # If empty, a random key will be generated
-  adminKey: ""
-
-  # Server URL (how clients reach ionscale)
-  # Default uses in-cluster DNS
-  serverUrl: ""
-
-  # Database configuration
-  database:
-    # Type: sqlite or postgres
-    type: sqlite
-
-    # PostgreSQL connection URL (only used when type=postgres)
-    # Example: postgres://user:password@host:5432/ionscale?sslmode=disable
-    postgresUrl: ""
-
-  # Persistence for SQLite (ignored when using PostgreSQL)
-  persistence:
-    enabled: true
-    size: 10Gi
-    storageClass: ""
-    accessModes:
-      - ReadWriteOnce
-
-  # TLS configuration
-  tls:
-    # Disable TLS (use for in-cluster communication)
-    disable: true
-    # certFile: ""
-    # keyFile: ""
-
-  # DERP server configuration
-  derp:
-    # Enable embedded DERP server
-    enabled: false
-    # Embedded DERP settings (when enabled: true)
-    regionId: 900
-    regionCode: "local"
-    regionName: "Local DERP"
-    stunPort: 3478
-    # External DERP map sources (URLs)
-    # Use external DERP servers instead of embedded
-    sources:
-      - https://controlplane.tailscale.com/derpmap/default
-
-  # Logging
-  logging:
-    level: info
-    # format: json
-
-  # Resource limits
+    repository: ghcr.io/mni-cloud/kodiak
+    # Empty follows Chart.appVersion. Set an immutable tag or digest to override.
+    tag: ""
+    pullPolicy: IfNotPresent
   resources:
     limits:
       cpu: 500m
-      memory: 256Mi
-    requests:
-      cpu: 100m
       memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+  podLabels: {}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  serviceAccountName: ""
 
-  # Service configuration
-  service:
-    type: ClusterIP
-    port: 8080
-    metricsPort: 9091
-    stunPort: 3478
+tailscale:
+  image: tailscale/tailscale:v1.98.9
 
-  # Optional dedicated LoadBalancer Service for the Tailscale control protocol.
-  # Metrics and STUN remain available only through the internal Service.
-  externalService:
-    enabled: false
-    name: ionscale-control
-    annotations: {}
-    loadBalancerClass: ""
-    externalTrafficPolicy: Local
-    port: 8080
+# Optional managed-control-plane integration. Kodiak does not install or own
+# Ionscale. Leave these values empty when only external control planes are used.
+managedControlPlane:
+  apiEndpoint: ""
+  loginURL: ""
+  skipTLSVerify: false
+  adminKeySecretRef:
+    name: ""
+    key: systemAdminKey
 
-# =============================================================================
-# [RBAC]: Role-Based Access Control
-# =============================================================================
 rbac:
   enable: true
 
-# =============================================================================
-# [CRD]: Custom Resource Definitions
-# =============================================================================
 crd:
-  # Include CRDs in the installation
   enable: true
-
-  # Keep CRDs when Helm release is uninstalled
-  # WARNING: Removing CRDs will delete all Kodiak resources
   keep: true
-
-# =============================================================================
-# [WEBHOOK]: Admission Webhooks
-# =============================================================================
-webhook:
-  enable: true
-
-# =============================================================================
-# [METRICS]: Metrics Export
-# =============================================================================
-metrics:
-  enable: true
-
-# =============================================================================
-# [PROMETHEUS]: Prometheus ServiceMonitor
-# =============================================================================
-prometheus:
-  enable: false
-
-# =============================================================================
-# [CERT-MANAGER]: TLS Certificate Management
-# =============================================================================
-certmanager:
-  enable: true
-
-# =============================================================================
-# [NETWORK POLICIES]: Network Policies
-# =============================================================================
-networkPolicy:
-  enable: false

@@ -49,22 +49,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-ionscale labels
-*/}}
-{{- define "kodiak.ionscale.labels" -}}
-{{ include "kodiak.labels" . }}
-app.kubernetes.io/component: ionscale
-{{- end }}
-
-{{/*
-ionscale selector labels
-*/}}
-{{- define "kodiak.ionscale.selectorLabels" -}}
-{{ include "kodiak.selectorLabels" . }}
-app.kubernetes.io/component: ionscale
-{{- end }}
-
-{{/*
 Manager labels
 */}}
 {{- define "kodiak.manager.labels" -}}
@@ -82,19 +66,8 @@ control-plane: controller-manager
 {{- end }}
 
 {{/*
-ionscale server URL
+Controller manager service account name.
 */}}
-{{- define "kodiak.ionscale.serverUrl" -}}
-{{- if .Values.ionscale.serverUrl }}
-{{- .Values.ionscale.serverUrl }}
-{{- else }}
-{{- printf "http://ionscale.%s.svc.cluster.local:%d" .Release.Namespace (int .Values.ionscale.service.port) }}
-{{- end }}
-{{- end }}
-
-{{/*
-ionscale endpoint for controller
-*/}}
-{{- define "kodiak.ionscale.endpoint" -}}
-{{- printf "http://ionscale.%s.svc.cluster.local:%d" .Release.Namespace (int .Values.ionscale.service.port) }}
+{{- define "kodiak.serviceAccountName" -}}
+{{- default (printf "%s-controller-manager" (include "kodiak.fullname" .)) .Values.controllerManager.serviceAccountName }}
 {{- end }}

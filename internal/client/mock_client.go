@@ -25,32 +25,30 @@ import (
 
 // MockControlServerClient is a mock implementation of ControlServerClientInterface for testing
 type MockControlServerClient struct {
-	CreateTailnetFunc       func(ctx context.Context, request *pb.CreateTailnetRequest) (*pb.Tailnet, error)
-	GetTailnetFunc          func(ctx context.Context, tailnetID uint64) (*pb.Tailnet, error)
-	UpdateTailnetFunc       func(ctx context.Context, request *pb.UpdateTailnetRequest) (*pb.Tailnet, error)
-	DeleteTailnetFunc       func(ctx context.Context, tailnetID uint64, force bool) error
-	ListTailnetsFunc        func(ctx context.Context) ([]*pb.Tailnet, error)
-	CreateAuthKeyFunc       func(ctx context.Context, tailnetID uint64, ephemeral bool, expiry time.Duration, tags []string, preAuthorized bool) (*pb.AuthKey, string, error)
-	DeleteAuthKeyFunc       func(ctx context.Context, authKeyID uint64) error
-	ListAuthKeysFunc        func(ctx context.Context, tailnetID uint64) ([]*pb.AuthKey, error)
-	ListMachinesFunc        func(ctx context.Context, tailnetID uint64) ([]*pb.Machine, error)
-	EnableMachineRoutesFunc func(ctx context.Context, machineID uint64, routes []string, replace bool) (*pb.MachineRoutes, error)
-	DeleteMachineFunc       func(ctx context.Context, machineID uint64) error
-	GetVersionFunc          func(ctx context.Context) (*pb.GetVersionResponse, error)
+	CreateTailnetFunc func(ctx context.Context, request *pb.CreateTailnetRequest) (*pb.Tailnet, error)
+	GetTailnetFunc    func(ctx context.Context, tailnetID uint64) (*pb.Tailnet, error)
+	UpdateTailnetFunc func(ctx context.Context, request *pb.UpdateTailnetRequest) (*pb.Tailnet, error)
+	DeleteTailnetFunc func(ctx context.Context, tailnetID uint64, force bool) error
+	ListTailnetsFunc  func(ctx context.Context) ([]*pb.Tailnet, error)
+	CreateAuthKeyFunc func(ctx context.Context, tailnetID uint64, ephemeral bool, expiry time.Duration, tags []string, preAuthorized bool) (*pb.AuthKey, string, error)
+	DeleteAuthKeyFunc func(ctx context.Context, authKeyID uint64) error
+	ListAuthKeysFunc  func(ctx context.Context, tailnetID uint64) ([]*pb.AuthKey, error)
+	ListMachinesFunc  func(ctx context.Context, tailnetID uint64) ([]*pb.Machine, error)
+	DeleteMachineFunc func(ctx context.Context, machineID uint64) error
+	GetVersionFunc    func(ctx context.Context) (*pb.GetVersionResponse, error)
 
 	// Call tracking
-	CreateTailnetCalls       []CreateTailnetCall
-	GetTailnetCalls          []uint64
-	UpdateTailnetCalls       []UpdateTailnetCall
-	DeleteTailnetCalls       []DeleteTailnetCall
-	ListTailnetsCalls        int
-	CreateAuthKeyCalls       []CreateAuthKeyCall
-	DeleteAuthKeyCalls       []uint64
-	ListAuthKeysCalls        []uint64
-	ListMachinesCalls        []uint64
-	EnableMachineRoutesCalls []EnableMachineRoutesCall
-	DeleteMachineCalls       []uint64
-	GetVersionCalls          int
+	CreateTailnetCalls []CreateTailnetCall
+	GetTailnetCalls    []uint64
+	UpdateTailnetCalls []UpdateTailnetCall
+	DeleteTailnetCalls []DeleteTailnetCall
+	ListTailnetsCalls  int
+	CreateAuthKeyCalls []CreateAuthKeyCall
+	DeleteAuthKeyCalls []uint64
+	ListAuthKeysCalls  []uint64
+	ListMachinesCalls  []uint64
+	DeleteMachineCalls []uint64
+	GetVersionCalls    int
 }
 
 // Call tracking structures
@@ -73,12 +71,6 @@ type CreateAuthKeyCall struct {
 	Expiry        time.Duration
 	Tags          []string
 	PreAuthorized bool
-}
-
-type EnableMachineRoutesCall struct {
-	MachineID uint64
-	Routes    []string
-	Replace   bool
 }
 
 // Ensure MockControlServerClient implements ControlServerClientInterface
@@ -162,18 +154,6 @@ func (m *MockControlServerClient) ListMachines(ctx context.Context, tailnetID ui
 	return []*pb.Machine{}, nil
 }
 
-func (m *MockControlServerClient) EnableMachineRoutes(ctx context.Context, machineID uint64, routes []string, replace bool) (*pb.MachineRoutes, error) {
-	m.EnableMachineRoutesCalls = append(m.EnableMachineRoutesCalls, EnableMachineRoutesCall{
-		MachineID: machineID,
-		Routes:    routes,
-		Replace:   replace,
-	})
-	if m.EnableMachineRoutesFunc != nil {
-		return m.EnableMachineRoutesFunc(ctx, machineID, routes, replace)
-	}
-	return &pb.MachineRoutes{}, nil
-}
-
 func (m *MockControlServerClient) DeleteMachine(ctx context.Context, machineID uint64) error {
 	m.DeleteMachineCalls = append(m.DeleteMachineCalls, machineID)
 	if m.DeleteMachineFunc != nil {
@@ -201,7 +181,6 @@ func (m *MockControlServerClient) Reset() {
 	m.DeleteAuthKeyCalls = nil
 	m.ListAuthKeysCalls = nil
 	m.ListMachinesCalls = nil
-	m.EnableMachineRoutesCalls = nil
 	m.DeleteMachineCalls = nil
 	m.GetVersionCalls = 0
 }

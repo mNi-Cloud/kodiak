@@ -11,6 +11,6 @@ roleRef:
   name: {{ include "kodiak.fullname" . }}-manager-role
 subjects:
 - kind: ServiceAccount
-  name: {{ .Values.controllerManager.serviceAccountName }}
+  name: {{ include "kodiak.serviceAccountName" . }}
   namespace: {{ .Release.Namespace }}
 {{- end }}
