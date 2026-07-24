@@ -14,6 +14,9 @@ spec:
     metadata:
       annotations:
         kubectl.kubernetes.io/default-container: manager
+        {{- if .Values.ionscale.enabled }}
+        checksum/ionscale-secret: {{ include (print $.Template.BasePath "/ionscale/secret.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.controllerManager.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -45,20 +48,29 @@ spec:
             - --tailscale-image={{ .Values.tailscale.image }}
             {{- if .Values.managedControlPlane.apiEndpoint }}
             - --ionscale-api-endpoint={{ .Values.managedControlPlane.apiEndpoint }}
+            {{- else if .Values.ionscale.enabled }}
+            - --ionscale-api-endpoint={{ include "kodiak.ionscale.apiEndpoint" . }}
             {{- end }}
             {{- if .Values.managedControlPlane.loginURL }}
             - --ionscale-login-url={{ .Values.managedControlPlane.loginURL }}
+            {{- else if .Values.ionscale.enabled }}
+            - --ionscale-login-url={{ include "kodiak.ionscale.serverURL" . }}
             {{- end }}
             {{- if .Values.managedControlPlane.skipTLSVerify }}
             - --ionscale-skip-tls-verify
             {{- end }}
-          {{- if .Values.managedControlPlane.adminKeySecretRef.name }}
+          {{- if or .Values.managedControlPlane.adminKeySecretRef.name .Values.ionscale.enabled }}
           env:
             - name: IONSCALE_ADMIN_KEY
               valueFrom:
                 secretKeyRef:
+                  {{- if .Values.managedControlPlane.adminKeySecretRef.name }}
                   name: {{ .Values.managedControlPlane.adminKeySecretRef.name }}
                   key: {{ .Values.managedControlPlane.adminKeySecretRef.key }}
+                  {{- else }}
+                  name: {{ include "kodiak.fullname" . }}-ionscale-admin
+                  key: systemAdminKey
+                  {{- end }}
           {{- end }}
           securityContext:
             allowPrivilegeEscalation: false

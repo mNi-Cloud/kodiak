@@ -23,8 +23,60 @@ controllerManager:
 tailscale:
   image: tailscale/tailscale:v1.98.9
 
-# Optional managed-control-plane integration. Kodiak does not install or own
-# Ionscale. Leave these values empty when only external control planes are used.
+# Optional bundled Ionscale control plane. Disable this when using Tailscale or
+# another externally managed compatible control plane.
+ionscale:
+  enabled: true
+  image:
+    repository: ghcr.io/jsiebens/ionscale
+    tag: "0.15.0"
+    pullPolicy: IfNotPresent
+  replicas: 1
+  adminKey: ""
+  serverUrl: ""
+  database:
+    type: sqlite
+    postgresUrl: ""
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+  tls:
+    disable: true
+  derp:
+    enabled: false
+    regionId: 900
+    regionCode: local
+    regionName: Local DERP
+    stunPort: 3478
+    sources:
+      - https://controlplane.tailscale.com/derpmap/default
+  logging:
+    level: info
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  service:
+    type: ClusterIP
+    port: 8080
+    metricsPort: 9091
+    stunPort: 3478
+  externalService:
+    enabled: false
+    name: ionscale-control
+    annotations: {}
+    loadBalancerClass: ""
+    externalTrafficPolicy: Local
+    port: 8080
+
+# Explicit settings override the bundled Ionscale endpoints. Leave them empty
+# to use the bundled server, or set them for an external managed control plane.
 managedControlPlane:
   apiEndpoint: ""
   loginURL: ""

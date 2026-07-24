@@ -7,7 +7,8 @@ It can use either:
 - an externally installed Ionscale control plane managed through Kodiak
   `Tailnet` resources.
 
-Kodiak does not install Ionscale, a DERP server, or cert-manager.
+The Helm chart can optionally install Ionscale. Kodiak does not install a DERP
+server or cert-manager.
 
 ## API
 
@@ -30,10 +31,12 @@ Tailscale client uses its official default control plane.
 
 ## Install
 
-The Helm chart expects Ionscale to be installed separately. Managed-control-
-plane values are optional:
+The Helm chart installs a bundled Ionscale control plane by default. Disable it
+when using Tailscale or another external compatible control plane:
 
 ```yaml
+ionscale:
+  enabled: false
 managedControlPlane:
   apiEndpoint: https://ionscale-api.example.com
   loginURL: https://vpn.example.com
@@ -53,7 +56,7 @@ For Kustomize development installs:
 
 ```sh
 make install
-make deploy IMG=ghcr.io/mni-cloud/kodiak:0.2.1
+make deploy IMG=ghcr.io/mni-cloud/kodiak:0.2.2
 ```
 
 Patch `IONSCALE_API_ENDPOINT`, `IONSCALE_LOGIN_URL`, and the optional

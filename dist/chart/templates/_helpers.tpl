@@ -49,6 +49,40 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Ionscale labels.
+*/}}
+{{- define "kodiak.ionscale.labels" -}}
+{{ include "kodiak.labels" . }}
+app.kubernetes.io/component: ionscale
+{{- end }}
+
+{{/*
+Ionscale selector labels.
+*/}}
+{{- define "kodiak.ionscale.selectorLabels" -}}
+{{ include "kodiak.selectorLabels" . }}
+app.kubernetes.io/component: ionscale
+{{- end }}
+
+{{/*
+Public Ionscale URL used by Tailscale clients.
+*/}}
+{{- define "kodiak.ionscale.serverURL" -}}
+{{- if .Values.ionscale.serverUrl -}}
+{{ .Values.ionscale.serverUrl }}
+{{- else -}}
+http://ionscale.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.ionscale.service.port }}
+{{- end -}}
+{{- end }}
+
+{{/*
+Internal Ionscale API endpoint used by the controller.
+*/}}
+{{- define "kodiak.ionscale.apiEndpoint" -}}
+http://ionscale.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.ionscale.service.port }}
+{{- end }}
+
+{{/*
 Manager labels
 */}}
 {{- define "kodiak.manager.labels" -}}
