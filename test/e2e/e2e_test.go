@@ -102,7 +102,9 @@ spec:
 		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 		defer func() {
-			_, _ = utils.Run(exec.Command("kubectl", "delete", "connector", "e2e", "-n", "default", "--wait=false"))
+			_, _ = utils.Run(exec.Command(
+				"kubectl", "delete", "connector", "e2e", "-n", "default", "--timeout=90s",
+			))
 			_, _ = utils.Run(exec.Command("kubectl", "delete", "secret", "e2e-auth", "-n", "default"))
 		}()
 
