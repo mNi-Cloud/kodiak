@@ -1091,12 +1091,24 @@ func findConnectorMachine(machines []*pb.Machine, resource *v1alpha1.Connector) 
 
 	desiredIP := strings.TrimSpace(resource.Status.TailscaleIP)
 
+	// Prefer the current machine identity before falling back to a hostname.
+	// Ionscale keeps old machines after auth-key rotation and assigns a numeric
+	// suffix to the replacement. A hostname match against the old machine would
+	// otherwise prevent route enablement on the current connector.
+	if desiredIP != "" {
+		for _, machine := range machines {
+			if machine == nil {
+				continue
+			}
+			if machine.GetIpv4() == desiredIP || machine.GetIpv6() == desiredIP {
+				return machine
+			}
+		}
+	}
+
 	for _, machine := range machines {
 		if machine == nil {
 			continue
-		}
-		if desiredIP != "" && (machine.GetIpv4() == desiredIP || machine.GetIpv6() == desiredIP) {
-			return machine
 		}
 		name := strings.ToLower(machine.GetName())
 		for _, ident := range desiredNames {
