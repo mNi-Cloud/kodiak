@@ -17,11 +17,11 @@ metadata:
     app.kubernetes.io/name: kodiak
     app.kubernetes.io/managed-by: kustomize
 spec:
+  replicas: 1
   selector:
     matchLabels:
       control-plane: controller-manager
       app.kubernetes.io/name: kodiak
-  replicas: 1
   template:
     metadata:
       annotations:
@@ -30,82 +30,54 @@ spec:
         control-plane: controller-manager
         app.kubernetes.io/name: kodiak
     spec:
-      # TODO(user): Uncomment the following code to configure the nodeAffinity expression
-      # according to the platforms which are supported by your solution.
-      # It is considered best practice to support multiple architectures. You can
-      # build your manager image using the makefile target docker-buildx.
-      # affinity:
-      #   nodeAffinity:
-      #     requiredDuringSchedulingIgnoredDuringExecution:
-      #       nodeSelectorTerms:
-      #         - matchExpressions:
-      #           - key: kubernetes.io/arch
-      #             operator: In
-      #             values:
-      #               - amd64
-      #               - arm64
-      #               - ppc64le
-      #               - s390x
-      #           - key: kubernetes.io/os
-      #             operator: In
-      #             values:
-      #               - linux
+      serviceAccountName: controller-manager
+      terminationGracePeriodSeconds: 10
       securityContext:
-        # Projects are configured by default to adhere to the "restricted" Pod Security Standards.
-        # This ensures that deployments meet the highest security requirements for Kubernetes.
-        # For more details, see: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
       containers:
-      - command:
-        - /manager
-        args:
-          - --leader-elect
-          - --health-probe-bind-address=:8081
-          - --ionscale-endpoint=http://ionscale.$(POD_NAMESPACE).svc.cluster.local:8080
-        image: controller:latest
-        name: manager
-        env:
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        - name: IONSCALE_ADMIN_KEY
-          valueFrom:
-            secretKeyRef:
-              name: ionscale-admin
-              key: systemAdminKey
-        - name: IONSCALE_CONFIG_NAME
-          value: ionscale-config
-        ports: []
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - "ALL"
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: 8081
-          initialDelaySeconds: 15
-          periodSeconds: 20
-        readinessProbe:
-          httpGet:
-            path: /readyz
-            port: 8081
-          initialDelaySeconds: 5
-          periodSeconds: 10
-        # TODO(user): Configure the resources accordingly based on the project requirements.
-        # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
-        resources:
-          limits:
-            cpu: 500m
-            memory: 128Mi
-          requests:
-            cpu: 10m
-            memory: 64Mi
-        volumeMounts: []
-      volumes: []
-      serviceAccountName: controller-manager
-      terminationGracePeriodSeconds: 10
+        - name: manager
+          image: controller:0.2.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - /manager
+          args:
+            - --leader-elect
+            - --health-probe-bind-address=:8081
+            - --tailscale-image=tailscale/tailscale:v1.98.9
+          env:
+            - name: IONSCALE_API_ENDPOINT
+              value: ""
+            - name: IONSCALE_LOGIN_URL
+              value: ""
+            - name: IONSCALE_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ionscale-admin
+                  key: systemAdminKey
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 500m
+              memory: 128Mi
+            requests:
+              cpu: 10m
+              memory: 64Mi

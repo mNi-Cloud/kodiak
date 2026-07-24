@@ -53,9 +53,6 @@ type ControlServerClientInterface interface {
 	// ListMachines lists machines in a tailnet
 	ListMachines(ctx context.Context, tailnetID uint64) ([]*pb.Machine, error)
 
-	// EnableMachineRoutes ensures the provided routes are enabled for the machine
-	EnableMachineRoutes(ctx context.Context, machineID uint64, routes []string, replace bool) (*pb.MachineRoutes, error)
-
 	// DeleteMachine deletes a machine
 	DeleteMachine(ctx context.Context, machineID uint64) error
 

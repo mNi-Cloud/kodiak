@@ -1,23 +1,9 @@
-# Kodiak Quick Start Example
-# This example sets up a basic Kodiak deployment with:
-# - Tailnet
-# - AuthKey
-# - Connector for subnet routing
-#
-# Prerequisites:
-# - Kodiak operator deployed (which includes ionscale control server)
-#
-# Apply with: kubectl apply -f kodiak_v1alpha1_quickstart.yaml
----
 apiVersion: kodiak.mnicloud.jp/v1alpha1
 kind: Tailnet
 metadata:
   name: quickstart-tailnet
-  labels:
-    app.kubernetes.io/name: kodiak-quickstart
 spec:
-  name: "quickstart"
-  # Allow all traffic by default
+  name: quickstart
   aclPolicy: |
     {
       "acls": [
@@ -26,40 +12,25 @@ spec:
           "src": ["*"],
           "dst": ["*:*"]
         }
-      ]
+      ],
+      "autoApprovers": {
+        "routes": {
+          "10.244.0.0/16": ["tag:k8s"],
+          "10.96.0.0/12": ["tag:k8s"]
+        }
+      }
     }
----
-apiVersion: kodiak.mnicloud.jp/v1alpha1
-kind: AuthKey
-metadata:
-  name: quickstart-authkey
-  labels:
-    app.kubernetes.io/name: kodiak-quickstart
-spec:
-  tailnetRef:
-    name: quickstart-tailnet
-  ephemeral: true
-  preAuthorized: true
-  expiry: "168h"  # 7 days
-  tags:
-    - "tag:k8s"
 ---
 apiVersion: kodiak.mnicloud.jp/v1alpha1
 kind: Connector
 metadata:
   name: quickstart-connector
-  labels:
-    app.kubernetes.io/name: kodiak-quickstart
 spec:
-  spec:
-    tailscale:
-      authKeyRef:
-        name: quickstart-authkey
-      # Uses the default ionscale endpoint from the Kodiak controller
-      # Advertise the default Kubernetes networks
-      # Adjust these CIDRs to match your cluster's configuration
-      advertiseRoutes:
-        - "10.244.0.0/16"   # Pod CIDR (common default)
-        - "10.96.0.0/12"    # Service CIDR (common default)
-      hostname: "k8s-quickstart"
-      userspaceNetworking: true
+  tailnetRef:
+    name: quickstart-tailnet
+  tags:
+    - tag:k8s
+  subnetRouter:
+    advertiseRoutes:
+      - 10.244.0.0/16
+      - 10.96.0.0/12

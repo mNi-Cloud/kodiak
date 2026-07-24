@@ -9,4 +9,4 @@ spec:
       securityContext: null
       containers:
         - name: manager
-          image: controller:latest
+          image: controller:0.2.0

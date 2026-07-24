@@ -11,33 +11,28 @@ spec:
     kind: Tailnet
     listKind: TailnetList
     plural: tailnets
+    shortNames:
+    - ktailnet
     singular: tailnet
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: Tailnet ready status
-      jsonPath: .status.ready
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: READY
-      type: boolean
-    - description: Tailnet ID
-      jsonPath: .status.tailnetId
+      type: string
+    - jsonPath: .status.tailnetID
       name: ID
-      type: integer
-    - description: Number of machines
-      jsonPath: .status.machineCount
+      type: string
+    - jsonPath: .status.machineCount
       name: MACHINES
       type: integer
-    - description: Current phase
-      jsonPath: .status.phase
-      name: PHASE
-      type: string
     - jsonPath: .metadata.creationTimestamp
       name: AGE
       type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Tailnet is the Schema for the tailnets API
+        description: Tailnet is the Schema for managed Ionscale Tailnets.
         properties:
           apiVersion:
             description: |-
@@ -57,66 +52,62 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of Tailnet
+            description: TailnetSpec is the desired state of an Ionscale Tailnet.
             properties:
               aclPolicy:
-                description: ACLPolicy defines access control list policy (HuJSON
-                  format)
+                description: ACLPolicy is the complete Ionscale ACL policy in HuJSON
+                  format.
                 type: string
               dnsConfig:
-                description: DNSConfig for the tailnet
+                description: DNSConfig configures Tailnet DNS.
                 properties:
                   domains:
-                    description: Domains for split DNS
                     items:
                       type: string
                     type: array
-                  magicDns:
-                    description: MagicDNS enables magic DNS
+                  magicDNS:
                     type: boolean
                   nameservers:
-                    description: Nameservers for the tailnet
                     items:
                       type: string
                     type: array
                   searchDomains:
-                    description: SearchDomains for DNS resolution
                     items:
                       type: string
                     type: array
                 type: object
               fileSharingEnabled:
                 default: false
-                description: FileSharingEnabled enables file sharing between nodes
                 type: boolean
               iamPolicy:
-                description: IAMPolicy defines identity and access management policy
-                  (HuJSON format)
+                description: IAMPolicy is the complete Ionscale IAM policy in HuJSON
+                  format.
                 type: string
               machineAuthorizationEnabled:
                 default: false
-                description: MachineAuthorizationEnabled requires machine authorization
                 type: boolean
               name:
-                description: Name of the tailnet
+                description: Name is the immutable remote Tailnet name.
+                maxLength: 63
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
+                x-kubernetes-validations:
+                - message: name is immutable
+                  rule: self == oldSelf
               serviceCollectionEnabled:
                 default: false
-                description: ServiceCollectionEnabled enables service collection
                 type: boolean
               sshEnabled:
                 default: false
-                description: SSHEnabled enables SSH access
                 type: boolean
             required:
             - name
             type: object
           status:
-            description: status defines the observed state of Tailnet
+            description: TailnetStatus is the observed state of a remote Tailnet.
             properties:
               conditions:
-                description: conditions represent the current state of the Tailnet
-                  resource.
+                description: Conditions contains the canonical readiness state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -175,27 +166,26 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              controlServerUrl:
-                description: ControlServerUrl is the public URL of the ionscale control
-                  server
-                type: string
               lastSyncTime:
-                description: LastSyncTime is the last time the tailnet was synced
+                description: LastSyncTime is the last successful synchronization time.
                 format: date-time
                 type: string
-              machineCount:
-                description: MachineCount is the number of machines in the tailnet
-                type: integer
-              phase:
-                description: Phase represents the current phase of the tailnet
+              loginURL:
+                description: LoginURL is the public Tailscale protocol endpoint used
+                  by managed Connectors.
                 type: string
-              ready:
-                description: Ready indicates if the tailnet is ready
-                type: boolean
-              tailnetId:
-                description: TailnetID is the ID assigned by the control server
+              machineCount:
+                description: MachineCount is the current number of machines.
+                format: int32
+                type: integer
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation reconciled.
                 format: int64
                 type: integer
+              tailnetID:
+                description: TailnetID is represented as a string to preserve uint64
+                  values in JSON clients.
+                type: string
             type: object
         required:
         - spec

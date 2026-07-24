@@ -1,7 +1,5 @@
 ## Append samples of your project ##
 resources:
-- kodiak_v1alpha1_connector.yaml
-- kodiak_v1alpha1_controlserver.yaml
-- kodiak_v1alpha1_tailnet.yaml
-- kodiak_v1alpha1_authkey.yaml
-# +kubebuilder:scaffold:manifestskustomizesamples
+  - kodiak_v1alpha1_tailnet.yaml
+  - kodiak_v1alpha1_authkey.yaml
+  - kodiak_v1alpha1_connector.yaml

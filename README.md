@@ -1,181 +1,131 @@
-# kodiak
+# Kodiak
 
-Kodiak is a Kubernetes Operator that provisions and manages a full self-hosted
-Tailscale environment powered by [ionscale](https://github.com/jsiebens/ionscale).
-It automates creation of the ionscale control plane, tailnets, authentication
-keys, and the connector workloads that join Kubernetes networks to Tailscale.
+Kodiak is a Kubernetes operator for stable Tailscale subnet-router workloads.
+It can use either:
 
-## Description
+- an existing Tailscale-compatible control plane and auth-key Secret; or
+- an externally installed Ionscale control plane managed through Kodiak
+  `Tailnet` resources.
 
-Kodiak exposes four custom resources (`ControlServer`, `Tailnet`, `AuthKey`, and
-`Connector`) that map directly to the lifecycle of an ionscale deployment:
+Kodiak does not install Ionscale, a DERP server, or cert-manager.
 
-- **ControlServer** provisions the ionscale API/control plane, including TLS
-  configuration, embedded DERP options, persistent storage, and optional OIDC
-  authentication. The controller renders ionscale configuration, wires any
-  referenced secrets (e.g. the system admin key), and maintains a Deployment,
-  Service, and PersistentVolumeClaim to run the server. Status reflects the
-  service endpoint and readiness.
-- **Tailnet** configures a tailnet on the control server. The controller calls
-  ionscale's API to create or update tailnet state (policies, DNS, feature
-  flags) and reports readiness, the assigned tailnet ID, and machine counts.
-- **AuthKey** manages short-lived authentication keys for joining nodes to a
-  tailnet. Kodiak requests keys from ionscale, stores the resulting value in a
-  Kubernetes secret, keeps status in sync with ionscale, and rotates keys when
-  specs change.
-- **Connector** (existing implementation) runs a Tailscale client pod that
-  connects Kubernetes networks to the tailnet, handling auth key injection,
-  connector pod lifecycle, and status reporting based on `tailscale status`.
+## API
 
-The controllers reconcile towards declarative state, use Kubernetes
-finalizers to clean up remote resources (e.g. deleting tailnets or auth keys),
-and surface detailed conditions in resource status.
+- `Connector` creates a kernel-networking `StatefulSet`. Every replica has a
+  stable Pod name and a dedicated Kubernetes Secret containing containerboot
+  state. Kodiak advertises routes but never approves them.
+- `Tailnet` manages Ionscale Tailnet policy, DNS, and feature settings.
+- `AuthKey` issues user/manual enrollment credentials for a managed Tailnet.
+  Connectors do not depend on `AuthKey` resources.
 
-## Getting Started
+Managed Connectors use a `tailnetRef`. Kodiak creates a short-lived,
+pre-authorized bootstrap credential for each replica, waits for containerboot
+to persist the device identity, then revokes the bootstrap credential. Route
+approval belongs in the Tailnet ACL `autoApprovers` policy.
 
-### Prerequisites
-- go version v1.23.0+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+External Connectors use an `authKeySecretRef`. If `loginURL` is omitted, the
+Tailscale client uses its official default control plane.
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+## Install
 
-```sh
-make docker-build docker-push IMG=<some-registry>/kodiak:tag
+The Helm chart expects Ionscale to be installed separately. Managed-control-
+plane values are optional:
+
+```yaml
+managedControlPlane:
+  apiEndpoint: https://ionscale-api.example.com
+  loginURL: https://vpn.example.com
+  adminKeySecretRef:
+    name: ionscale-admin
+    key: systemAdminKey
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+```sh
+helm upgrade --install kodiak ./dist/chart \
+  --namespace kodiak-system \
+  --create-namespace \
+  -f values.yaml
+```
 
-**Install the CRDs into the cluster:**
+For Kustomize development installs:
 
 ```sh
 make install
+make deploy IMG=ghcr.io/mni-cloud/kodiak:0.2.0
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+Patch `IONSCALE_API_ENDPOINT`, `IONSCALE_LOGIN_URL`, and the optional
+`ionscale-admin` Secret reference in `config/manager/manager.yaml` when using
+managed Tailnets.
+
+## External Connector
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: connector-auth
+stringData:
+  TS_AUTH_KEY: tskey-auth-...
+---
+apiVersion: kodiak.mnicloud.jp/v1alpha1
+kind: Connector
+metadata:
+  name: office
+spec:
+  authKeySecretRef:
+    name: connector-auth
+    key: TS_AUTH_KEY
+  subnetRouter:
+    advertiseRoutes:
+      - 10.0.1.0/24
+```
+
+For a custom control plane, add `spec.loginURL`.
+
+## Managed Connector
+
+```yaml
+apiVersion: kodiak.mnicloud.jp/v1alpha1
+kind: Connector
+metadata:
+  name: office
+spec:
+  tailnetRef:
+    name: production
+  tags:
+    - tag:office-router
+  subnetRouter:
+    advertiseRoutes:
+      - 10.0.1.0/24
+```
+
+The referenced Tailnet ACL must approve the route for the Connector tag.
+Kodiak exposes advertised and enabled routes separately in
+`status.devices[]`, so policy failures remain visible.
+
+## Security boundary
+
+Kodiak never calls the Ionscale route-enable API; `autoApprovers` is the only
+managed route-approval authority. Connector bootstrap keys stay in
+controller-owned replica State Secrets and are revoked after identity is
+persisted.
+
+Ionscale must also enforce that tags requested during registration are a
+subset of the tags carried by the auth key. Until that control-plane check is
+present, do not treat separation between user and Connector tags as a tenant
+security boundary.
+
+## Development
 
 ```sh
-make deploy IMG=<some-registry>/kodiak:tag
+make test
+helm lint dist/chart
+kustomize build config/default
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
-
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+E2E tests require Docker and an isolated Kind cluster:
 
 ```sh
-kubectl apply -k config/samples/
+make test-e2e
 ```
-
->**NOTE**: Ensure that the samples has default values to test it out.
-
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
-
-```sh
-kubectl delete -k config/samples/
-```
-
-**Delete the APIs(CRDs) from the cluster:**
-
-```sh
-make uninstall
-```
-
-**UnDeploy the controller from the cluster:**
-
-```sh
-make undeploy
-```
-
-## Project Distribution
-
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/kodiak:tag
-```
-
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
-
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/kodiak/<tag or branch>/dist/install.yaml
-```
-
-### By providing a Helm Chart
-
-1. Build the chart using the optional helm plugin
-
-```sh
-kubebuilder edit --plugins=helm/v1-alpha
-```
-
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
-
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
-
-## Contributing
-### Required Secrets
-
-Control server access requires a system admin key. By default Kodiak expects a
-secret named `<controlserver-name>-admin` in the same namespace with a
-`systemAdminKey` entry. You can override the secret name using the annotation
-`kodiak.mnicloud.jp/system-admin-key-secret` on the `ControlServer` resource.
-
-Auth keys are stored in Kubernetes secrets. If `spec.secretName` is omitted the
-controller creates a secret named `authkey-<resource-name>` containing a
-`TS_AUTH_KEY` entry.
-
-### Development Notes
-
-- Controller unit tests use `envtest`. Install the Kubernetes control-plane
-  binaries (etcd, kube-apiserver, kubectl) via `make envtest` before running
-  `go test ./...`.
-- E2E tests rely on Docker and Kind. Expect failures if these dependencies are
-  unavailable in the current environment.
-
-Please open issues or pull requests for bugs, enhancements, or documentation
-updates.
-
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
-
-## License
-
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.

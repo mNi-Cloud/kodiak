@@ -14,78 +14,76 @@ spec:
     metadata:
       annotations:
         kubectl.kubernetes.io/default-container: manager
-        {{- if .Values.ionscale.enabled }}
-        checksum/ionscale-secret: {{ include (print $.Template.BasePath "/ionscale/secret.yaml") . | sha256sum }}
-        {{- end }}
-        {{- with .Values.controllerManager.pod.annotations }}
+        {{- with .Values.controllerManager.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
         {{- include "kodiak.manager.labels" . | nindent 8 }}
-        {{- with .Values.controllerManager.pod.labels }}
+        {{- with .Values.controllerManager.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      serviceAccountName: {{ include "kodiak.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: manager
-          image: {{ .Values.controllerManager.container.image.repository }}:{{ .Values.controllerManager.container.image.tag }}
+          image: "{{ .Values.controllerManager.image.repository }}:{{ default .Chart.AppVersion .Values.controllerManager.image.tag }}"
+          imagePullPolicy: {{ .Values.controllerManager.image.pullPolicy }}
           command:
             - /manager
           args:
-            {{- range .Values.controllerManager.container.args }}
-            - {{ . }}
+            - --leader-elect
+            - --health-probe-bind-address=:8081
+            - --tailscale-image={{ .Values.tailscale.image }}
+            {{- if .Values.managedControlPlane.apiEndpoint }}
+            - --ionscale-api-endpoint={{ .Values.managedControlPlane.apiEndpoint }}
             {{- end }}
-            {{- if .Values.ionscale.enabled }}
-            - "--ionscale-endpoint={{ include "kodiak.ionscale.endpoint" . }}"
+            {{- if .Values.managedControlPlane.loginURL }}
+            - --ionscale-login-url={{ .Values.managedControlPlane.loginURL }}
             {{- end }}
+            {{- if .Values.managedControlPlane.skipTLSVerify }}
+            - --ionscale-skip-tls-verify
+            {{- end }}
+          {{- if .Values.managedControlPlane.adminKeySecretRef.name }}
           env:
-            {{- if .Values.ionscale.enabled }}
-            - name: POD_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
             - name: IONSCALE_ADMIN_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "kodiak.fullname" . }}-ionscale-admin
-                  key: systemAdminKey
-            - name: IONSCALE_CONFIG_NAME
-              value: {{ include "kodiak.fullname" . }}-ionscale-config
-            {{- end }}
-          ports:
-            - name: metrics
-              containerPort: 8443
-              protocol: TCP
-            - name: health
-              containerPort: 8081
-              protocol: TCP
-            {{- if .Values.webhook.enable }}
-            - name: webhook
-              containerPort: 9443
-              protocol: TCP
-            {{- end }}
-          livenessProbe:
-            {{- toYaml .Values.controllerManager.container.livenessProbe | nindent 12 }}
-          readinessProbe:
-            {{- toYaml .Values.controllerManager.container.readinessProbe | nindent 12 }}
-          resources:
-            {{- toYaml .Values.controllerManager.container.resources | nindent 12 }}
-          securityContext:
-            {{- toYaml .Values.controllerManager.container.securityContext | nindent 12 }}
-          {{- if and .Values.certmanager.enable .Values.webhook.enable }}
-          volumeMounts:
-            - name: cert
-              mountPath: /tmp/k8s-webhook-server/serving-certs
-              readOnly: true
+                  name: {{ .Values.managedControlPlane.adminKeySecretRef.name }}
+                  key: {{ .Values.managedControlPlane.adminKeySecretRef.key }}
           {{- end }}
-      securityContext:
-        {{- toYaml .Values.controllerManager.securityContext | nindent 8 }}
-      serviceAccountName: {{ .Values.controllerManager.serviceAccountName }}
-      terminationGracePeriodSeconds: {{ .Values.controllerManager.terminationGracePeriodSeconds }}
-      {{- if and .Values.certmanager.enable .Values.webhook.enable }}
-      volumes:
-        - name: cert
-          secret:
-            secretName: {{ include "kodiak.fullname" . }}-webhook-server-cert
-            defaultMode: 420
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.controllerManager.resources | nindent 12 }}
+      {{- with .Values.controllerManager.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controllerManager.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controllerManager.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
       {{- end }}

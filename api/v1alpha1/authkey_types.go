@@ -21,106 +21,111 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+const AuthKeyConditionReady = "Ready"
 
-// AuthKeySpec defines the desired state of AuthKey
+// AuthKeySpec requests an Ionscale enrollment credential.
+// AuthKey is intended for user or manually managed device enrollment. Kodiak
+// Connectors use controller-owned bootstrap credentials instead.
 type AuthKeySpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
+	// TailnetRef references the managed Tailnet.
 	// +kubebuilder:validation:Required
-	// TailnetRef references the Tailnet this auth key belongs to
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="tailnetRef is immutable"
 	TailnetRef corev1.LocalObjectReference `json:"tailnetRef"`
 
+	// Ephemeral makes machines registered with this key ephemeral.
 	// +optional
 	// +kubebuilder:default=false
-	// Ephemeral determines if machines authenticated with this key are ephemeral
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ephemeral is immutable; change rotationNonce to issue a new key"
 	Ephemeral bool `json:"ephemeral,omitempty"`
 
+	// Expiry is the lifetime of newly issued keys. Zero uses the control-plane default.
 	// +optional
-	// Expiry duration for the auth key (e.g., "24h", "7d")
-	Expiry string `json:"expiry,omitempty"`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="expiry is immutable; change rotationNonce to issue a new key"
+	Expiry *metav1.Duration `json:"expiry,omitempty"`
 
-	// +optional
-	// Tags to apply to machines authenticated with this key
-	Tags []string `json:"tags,omitempty"`
+	// Tags are fixed at issuance.
+	// +required
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:Pattern=`^tag:[a-zA-Z0-9][a-zA-Z0-9-]*$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="tags are immutable; change rotationNonce to issue a new key"
+	Tags []string `json:"tags"`
 
+	// PreAuthorized authorizes machines immediately after registration.
 	// +optional
 	// +kubebuilder:default=false
-	// PreAuthorized determines if machines are automatically authorized
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="preAuthorized is immutable; change rotationNonce to issue a new key"
 	PreAuthorized bool `json:"preAuthorized,omitempty"`
 
+	// SecretName is the Secret that receives TS_AUTH_KEY.
 	// +optional
-	// SecretName to store the generated auth key (defaults to authkey-<name>)
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="secretName is immutable"
 	SecretName string `json:"secretName,omitempty"`
+
+	// RotationNonce requests replacement when its value changes.
+	// +optional
+	// +kubebuilder:validation:MaxLength=128
+	RotationNonce string `json:"rotationNonce,omitempty"`
 }
 
-// AuthKeyStatus defines the observed state of AuthKey.
+// AuthKeyStatus is the observed state of an issued credential.
 type AuthKeyStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
+	// ObservedGeneration is the most recent generation reconciled.
 	// +optional
-	// KeyID is the ID assigned by the control server
-	KeyID uint64 `json:"keyId,omitempty"`
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
+	// KeyID is represented as a string to preserve uint64 values in JSON clients.
 	// +optional
-	// SecretRef references the secret containing the auth key
+	KeyID string `json:"keyID,omitempty"`
+
+	// SecretRef references the Secret containing TS_AUTH_KEY.
+	// +optional
 	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
 
+	// CreatedAt is the remote creation time.
 	// +optional
-	// CreatedAt is when the key was created
 	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
 
+	// ExpiresAt is the remote expiration time.
 	// +optional
-	// ExpiresAt is when the key expires
 	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
 
+	// IssuedRotationNonce is the nonce associated with the current key.
 	// +optional
-	// Ready indicates if the auth key is ready for use
-	Ready bool `json:"ready,omitempty"`
+	IssuedRotationNonce string `json:"issuedRotationNonce,omitempty"`
 
+	// RetiringKeyID is an old remote key pending deletion after rotation.
 	// +optional
-	// Phase represents the current phase of the auth key
-	Phase string `json:"phase,omitempty"`
+	RetiringKeyID string `json:"retiringKeyID,omitempty"`
 
-	// conditions represent the current state of the AuthKey resource.
+	// Conditions contains the canonical readiness state.
+	// +optional
 	// +listType=map
 	// +listMapKey=type
-	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="READY",type="boolean",JSONPath=".status.ready",description="Auth key ready status"
-// +kubebuilder:printcolumn:name="TAILNET",type="string",JSONPath=".spec.tailnetRef.name",description="Tailnet reference"
-// +kubebuilder:printcolumn:name="EPHEMERAL",type="boolean",JSONPath=".spec.ephemeral",description="Ephemeral key"
-// +kubebuilder:printcolumn:name="PREAUTH",type="boolean",JSONPath=".spec.preAuthorized",description="Pre-authorized"
-// +kubebuilder:printcolumn:name="EXPIRES",type="date",JSONPath=".status.expiresAt",description="Expiration time"
+// +kubebuilder:resource:shortName={"kauthkey"}
+// +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="TAILNET",type="string",JSONPath=".spec.tailnetRef.name"
+// +kubebuilder:printcolumn:name="EXPIRES",type="date",JSONPath=".status.expiresAt"
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 
-// AuthKey is the Schema for the authkeys API
+// AuthKey is the Schema for enrollment credentials.
 type AuthKey struct {
-	metav1.TypeMeta `json:",inline"`
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// metadata is a standard object metadata
-	// +optional
-	metav1.ObjectMeta `json:"metadata,omitempty,omitzero"`
-
-	// spec defines the desired state of AuthKey
-	// +required
-	Spec AuthKeySpec `json:"spec"`
-
-	// status defines the observed state of AuthKey
-	// +optional
-	Status AuthKeyStatus `json:"status,omitempty,omitzero"`
+	Spec   AuthKeySpec   `json:"spec"`
+	Status AuthKeyStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// AuthKeyList contains a list of AuthKey
+// AuthKeyList contains a list of AuthKey.
 type AuthKeyList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

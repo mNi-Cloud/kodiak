@@ -29,7 +29,13 @@ spec:
           "src": ["*"],
           "dst": ["*:*"]
         }
-      ]
+      ],
+      "autoApprovers": {
+        "routes": {
+          "10.244.0.0/16": ["tag:k8s"],
+          "10.96.0.0/12": ["tag:k8s"]
+        }
+      }
     }
 
   # DNS configuration

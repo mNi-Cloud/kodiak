@@ -16,138 +16,112 @@ limitations under the License.
 
 package v1alpha1
 
-import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-)
+import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+const TailnetConditionReady = "Ready"
 
-// TailnetSpec defines the desired state of Tailnet
+// TailnetSpec is the desired state of an Ionscale Tailnet.
 type TailnetSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
+	// Name is the immutable remote Tailnet name.
 	// +kubebuilder:validation:Required
-	// Name of the tailnet
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="name is immutable"
 	Name string `json:"name"`
 
+	// IAMPolicy is the complete Ionscale IAM policy in HuJSON format.
 	// +optional
-	// IAMPolicy defines identity and access management policy (HuJSON format)
 	IAMPolicy string `json:"iamPolicy,omitempty"`
 
+	// ACLPolicy is the complete Ionscale ACL policy in HuJSON format.
 	// +optional
-	// ACLPolicy defines access control list policy (HuJSON format)
 	ACLPolicy string `json:"aclPolicy,omitempty"`
 
+	// DNSConfig configures Tailnet DNS.
 	// +optional
-	// DNSConfig for the tailnet
 	DNSConfig *TailnetDNSConfig `json:"dnsConfig,omitempty"`
 
 	// +optional
 	// +kubebuilder:default=false
-	// ServiceCollectionEnabled enables service collection
 	ServiceCollectionEnabled bool `json:"serviceCollectionEnabled,omitempty"`
 
 	// +optional
 	// +kubebuilder:default=false
-	// FileSharingEnabled enables file sharing between nodes
 	FileSharingEnabled bool `json:"fileSharingEnabled,omitempty"`
 
 	// +optional
 	// +kubebuilder:default=false
-	// SSHEnabled enables SSH access
 	SSHEnabled bool `json:"sshEnabled,omitempty"`
 
 	// +optional
 	// +kubebuilder:default=false
-	// MachineAuthorizationEnabled requires machine authorization
 	MachineAuthorizationEnabled bool `json:"machineAuthorizationEnabled,omitempty"`
 }
 
-// TailnetDNSConfig defines DNS configuration for a tailnet
+// TailnetDNSConfig defines DNS configuration for a Tailnet.
 type TailnetDNSConfig struct {
 	// +optional
-	// Nameservers for the tailnet
 	Nameservers []string `json:"nameservers,omitempty"`
 
 	// +optional
-	// MagicDNS enables magic DNS
-	MagicDNS bool `json:"magicDns,omitempty"`
+	MagicDNS bool `json:"magicDNS,omitempty"`
 
 	// +optional
-	// Domains for split DNS
 	Domains []string `json:"domains,omitempty"`
 
 	// +optional
-	// SearchDomains for DNS resolution
 	SearchDomains []string `json:"searchDomains,omitempty"`
 }
 
-// TailnetStatus defines the observed state of Tailnet.
+// TailnetStatus is the observed state of a remote Tailnet.
 type TailnetStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
+	// ObservedGeneration is the most recent generation reconciled.
 	// +optional
-	// TailnetID is the ID assigned by the control server
-	TailnetID uint64 `json:"tailnetId,omitempty"`
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
+	// TailnetID is represented as a string to preserve uint64 values in JSON clients.
 	// +optional
-	// Ready indicates if the tailnet is ready
-	Ready bool `json:"ready,omitempty"`
+	TailnetID string `json:"tailnetID,omitempty"`
 
+	// LoginURL is the public Tailscale protocol endpoint used by managed Connectors.
 	// +optional
-	// Phase represents the current phase of the tailnet
-	Phase string `json:"phase,omitempty"`
+	LoginURL string `json:"loginURL,omitempty"`
 
+	// MachineCount is the current number of machines.
 	// +optional
-	// MachineCount is the number of machines in the tailnet
-	MachineCount int `json:"machineCount,omitempty"`
+	MachineCount int32 `json:"machineCount,omitempty"`
 
+	// LastSyncTime is the last successful synchronization time.
 	// +optional
-	// ControlServerUrl is the public URL of the ionscale control server
-	ControlServerUrl string `json:"controlServerUrl,omitempty"`
-
-	// +optional
-	// LastSyncTime is the last time the tailnet was synced
 	LastSyncTime *metav1.Time `json:"lastSyncTime,omitempty"`
 
-	// conditions represent the current state of the Tailnet resource.
+	// Conditions contains the canonical readiness state.
+	// +optional
 	// +listType=map
 	// +listMapKey=type
-	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="READY",type="boolean",JSONPath=".status.ready",description="Tailnet ready status"
-// +kubebuilder:printcolumn:name="ID",type="integer",JSONPath=".status.tailnetId",description="Tailnet ID"
-// +kubebuilder:printcolumn:name="MACHINES",type="integer",JSONPath=".status.machineCount",description="Number of machines"
-// +kubebuilder:printcolumn:name="PHASE",type="string",JSONPath=".status.phase",description="Current phase"
+// +kubebuilder:resource:shortName={"ktailnet"}
+// +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="ID",type="string",JSONPath=".status.tailnetID"
+// +kubebuilder:printcolumn:name="MACHINES",type="integer",JSONPath=".status.machineCount"
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 
-// Tailnet is the Schema for the tailnets API
+// Tailnet is the Schema for managed Ionscale Tailnets.
 type Tailnet struct {
-	metav1.TypeMeta `json:",inline"`
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// metadata is a standard object metadata
-	// +optional
-	metav1.ObjectMeta `json:"metadata,omitempty,omitzero"`
-
-	// spec defines the desired state of Tailnet
-	// +required
-	Spec TailnetSpec `json:"spec"`
-
-	// status defines the observed state of Tailnet
-	// +optional
-	Status TailnetStatus `json:"status,omitempty,omitzero"`
+	Spec   TailnetSpec   `json:"spec"`
+	Status TailnetStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// TailnetList contains a list of Tailnet
+// TailnetList contains a list of Tailnet.
 type TailnetList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

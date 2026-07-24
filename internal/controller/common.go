@@ -2,7 +2,6 @@ package controller
 
 import (
 	"errors"
-	"strings"
 
 	"github.com/bufbuild/connect-go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,43 +22,6 @@ func isConnectNotFound(err error) bool {
 	if errors.As(err, &connectErr) {
 		return connectErr.Code() == connect.CodeNotFound
 	}
-	return false
-}
-
-// isConnectUnavailable checks if the error indicates the control server is unreachable.
-// This includes DNS resolution errors, connection refused, timeouts, etc.
-// During deletion, we treat these errors as non-fatal to avoid blocking resource cleanup
-// when the control server is temporarily or permanently unavailable.
-func isConnectUnavailable(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-
-	// DNS resolution failure
-	if strings.Contains(errStr, "no such host") {
-		return true
-	}
-
-	// Connection refused
-	if strings.Contains(errStr, "connection refused") {
-		return true
-	}
-
-	// Connection timeout or reset
-	if strings.Contains(errStr, "connection timed out") ||
-		strings.Contains(errStr, "i/o timeout") ||
-		strings.Contains(errStr, "connection reset") {
-		return true
-	}
-
-	// gRPC/Connect unavailable or deadline exceeded codes
-	var connectErr *connect.Error
-	if errors.As(err, &connectErr) {
-		code := connectErr.Code()
-		return code == connect.CodeUnavailable || code == connect.CodeDeadlineExceeded
-	}
-
 	return false
 }
 

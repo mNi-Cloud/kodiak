@@ -18,19 +18,19 @@ package controller
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	pb "github.com/jsiebens/ionscale/pkg/gen/ionscale/v1"
+	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
 	controlclient "github.com/mNi-Cloud/kodiak/internal/client"
-	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -38,33 +38,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	kodiakv1alpha1 "github.com/mNi-Cloud/kodiak/api/v1alpha1"
 )
 
 const (
-	authKeyConditionReady     = "Ready"
-	reasonMissingTailnetRef   = "MissingTailnetRef"
-	reasonTailnetNotFound     = "TailnetNotFound"
-	reasonTailnetNotReady     = "TailnetNotReady"
-	reasonMissingAdminToken   = "MissingAdminKeySecret"
-	reasonInvalidSpec         = "InvalidSpec"
-	reasonAuthKeyCreated      = "AuthKeyCreated"
-	reasonAuthKeyRotated      = "AuthKeyRotated"
-	reasonAuthKeySynced       = "AuthKeySynced"
-	reasonAuthKeyError        = "AuthKeyError"
-	authKeySpecHashAnnotation = "kodiak.mnicloud.jp/authkey-spec-hash"
-	authKeySecretDataKey      = "TS_AUTH_KEY"
-	defaultAuthKeyRequeue     = 6 * time.Hour
-	dependentNotReadyRequeue  = 30 * time.Second
-	rotationRetryRequeue      = 30 * time.Second
+	authKeySecretDataKey = "TS_AUTH_KEY"
 
-	phaseReady   = "Ready"
-	phasePending = "Pending"
-	phaseError   = "Error"
+	reasonAuthKeyReady                = "AuthKeyReady"
+	reasonAuthKeyIssuing              = "AuthKeyIssuing"
+	reasonAuthKeyRotating             = "AuthKeyRotating"
+	reasonAuthKeyError                = "AuthKeyError"
+	reasonAuthKeyTailnetNotReady      = "TailnetNotReady"
+	reasonAuthKeyConfigurationMissing = "ConfigurationMissing"
+
+	defaultAuthKeyRequeue = time.Minute
+	authKeyRetryRequeue   = 10 * time.Second
 )
 
-// AuthKeyReconciler reconciles a AuthKey object
+// AuthKeyReconciler reconciles user and manual enrollment credentials.
 type AuthKeyReconciler struct {
 	client.Client
 	Scheme           *runtime.Scheme
@@ -74,255 +64,288 @@ type AuthKeyReconciler struct {
 	IonscaleSkipTLS  bool
 }
 
-// +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=authkeys,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=authkeys/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=kodiak.mnicloud.jp,resources=authkeys/finalizers,verbs=update
-
-// nolint:gocyclo // the reconciliation flow is complex and already factored into helpers where practical
 func (r *AuthKeyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("authkey", req.NamespacedName)
 
-	var authKey kodiakv1alpha1.AuthKey
-	if err := r.Get(ctx, req.NamespacedName, &authKey); err != nil {
-		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, fmt.Errorf("unable to fetch AuthKey %s: %w", req.NamespacedName, err)
+	var resource kodiakv1alpha1.AuthKey
+	if err := r.Get(ctx, req.NamespacedName, &resource); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if !authKey.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, &authKey)
+	if !resource.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, &resource)
 	}
-
-	if result, err := r.ensureFinalizer(ctx, &authKey); err != nil || result.Requeue {
+	if result, err := ensureFinalizer(ctx, r.Client, &resource); err != nil || result.Requeue {
 		return result, err
 	}
 
-	if authKey.Spec.TailnetRef.Name == "" {
-		logger.Info("tailnet reference not specified")
-		if err := r.setPendingStatus(ctx, &authKey, reasonMissingTailnetRef, "spec.tailnetRef.name must be provided"); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
-	}
-
-	tailnet := &kodiakv1alpha1.Tailnet{}
-	if err := r.Get(ctx, types.NamespacedName{Name: authKey.Spec.TailnetRef.Name, Namespace: authKey.Namespace}, tailnet); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("referenced tailnet not found", "tailnet", authKey.Spec.TailnetRef.Name)
-			if err := r.setPendingStatus(ctx, &authKey, reasonTailnetNotFound,
-				fmt.Sprintf("tailnet %q not found", authKey.Spec.TailnetRef.Name)); err != nil {
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
-		}
-		return ctrl.Result{}, fmt.Errorf("unable to fetch tailnet %s: %w", authKey.Spec.TailnetRef.Name, err)
-	}
-
-	if !tailnet.Status.Ready || tailnet.Status.TailnetID == 0 {
-		logger.Info("tailnet not ready", "tailnet", tailnet.Name)
-		if err := r.setPendingStatus(ctx, &authKey, reasonTailnetNotReady,
-			fmt.Sprintf("tailnet %q is not ready", tailnet.Name)); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
-	}
-
 	if r.IonscaleEndpoint == "" || r.IonscaleAdminKey == "" {
-		logger.Error(nil, "ionscale configuration not provided")
-		if err := r.setPendingStatus(ctx, &authKey, reasonMissingAdminToken,
-			"ionscale endpoint or admin key not configured"); err != nil {
-			return ctrl.Result{}, err
+		return r.notReady(ctx, &resource, reasonAuthKeyConfigurationMissing, "Ionscale API endpoint or admin key is not configured")
+	}
+
+	var tailnet kodiakv1alpha1.Tailnet
+	if err := r.Get(ctx, types.NamespacedName{Namespace: resource.Namespace, Name: resource.Spec.TailnetRef.Name}, &tailnet); err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.notReady(ctx, &resource, reasonAuthKeyTailnetNotReady, fmt.Sprintf("Tailnet %q does not exist", resource.Spec.TailnetRef.Name))
 		}
-		return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
-	}
-
-	clientFactory := r.ClientFactory
-	if clientFactory == nil {
-		clientFactory = controlclient.DefaultClientFactory()
-	}
-	ctrlClient, err := clientFactory(r.IonscaleEndpoint, r.IonscaleAdminKey, r.IonscaleSkipTLS)
-	if err != nil {
-		logger.Error(err, "failed to create control server client", "endpoint", r.IonscaleEndpoint)
-		if err := r.setErrorStatus(ctx, &authKey, reasonAuthKeyError, fmt.Errorf("unable to construct control server client: %w", err)); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
-	}
-
-	desiredSecretName := authKey.Spec.SecretName
-	if desiredSecretName == "" {
-		desiredSecretName = defaultAuthKeySecretName(authKey.Name)
-	}
-
-	specHash := hashAuthKeySpec(authKey.Spec)
-	currentHash := authKey.GetAnnotations()[authKeySpecHashAnnotation]
-
-	if authKey.Status.KeyID != 0 && currentHash != specHash {
-		logger.Info("auth key spec changed, rotating key")
-		if err := r.rotateAuthKey(ctx, &authKey, ctrlClient, desiredSecretName, specHash); err != nil {
-			if err := r.setErrorStatus(ctx, &authKey, reasonAuthKeyError, err); err != nil {
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{RequeueAfter: rotationRetryRequeue}, nil
-		}
-	}
-
-	if authKey.Status.KeyID == 0 {
-		return r.provisionNewAuthKey(ctx, &authKey, ctrlClient, tailnet.Status.TailnetID, desiredSecretName, specHash)
-	}
-
-	remoteKey, err := r.findRemoteAuthKey(ctx, ctrlClient, tailnet.Status.TailnetID, authKey.Status.KeyID)
-	if err != nil {
-		logger.Error(err, "failed to list auth keys")
-		if err := r.setErrorStatus(ctx, &authKey, reasonAuthKeyError, err); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
-	}
-
-	if remoteKey == nil {
-		logger.Info("remote auth key no longer present, scheduling rotation")
-		if err := r.resetAuthKeyStatus(ctx, &authKey, reasonAuthKeyRotated, "Remote auth key missing; a new key will be generated"); err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := r.deleteSecretIfExists(ctx, authKey.Namespace, desiredSecretName); err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := r.ensureSpecHashAnnotation(ctx, &authKey, specHash); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
-	}
-
-	if err := r.ensureAuthKeySecretPresent(ctx, &authKey, desiredSecretName); err != nil {
-		logger.Error(err, "auth key secret missing, rotating key")
-		if err := r.rotateAuthKey(ctx, &authKey, ctrlClient, desiredSecretName, specHash); err != nil {
-			if err := r.setErrorStatus(ctx, &authKey, reasonAuthKeyError, err); err != nil {
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{RequeueAfter: rotationRetryRequeue}, nil
-		}
-		return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
-	}
-
-	if err := r.setReadyStatus(ctx, &authKey, remoteKey, desiredSecretName, reasonAuthKeySynced, "Auth key is valid and ready"); err != nil {
 		return ctrl.Result{}, err
 	}
-
-	if err := r.ensureSpecHashAnnotation(ctx, &authKey, specHash); err != nil {
-		return ctrl.Result{}, err
+	if !meta.IsStatusConditionTrue(tailnet.Status.Conditions, kodiakv1alpha1.TailnetConditionReady) || tailnet.Status.TailnetID == "" {
+		return r.notReady(ctx, &resource, reasonAuthKeyTailnetNotReady, fmt.Sprintf("Tailnet %q is not ready", tailnet.Name))
+	}
+	tailnetID, err := strconv.ParseUint(tailnet.Status.TailnetID, 10, 64)
+	if err != nil {
+		return r.notReady(ctx, &resource, reasonAuthKeyTailnetNotReady, fmt.Sprintf("Tailnet %q has invalid status.tailnetID", tailnet.Name))
 	}
 
+	ctrlClient, err := r.controlClient()
+	if err != nil {
+		return r.fail(ctx, &resource, err)
+	}
+
+	if resource.Status.RetiringKeyID != "" {
+		if err := deleteRemoteAuthKey(ctx, ctrlClient, resource.Status.RetiringKeyID); err != nil {
+			return r.fail(ctx, &resource, fmt.Errorf("delete retiring auth key: %w", err))
+		}
+		original := resource.DeepCopy()
+		resource.Status.RetiringKeyID = ""
+		if err := r.Status().Patch(ctx, &resource, client.MergeFrom(original)); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	secretName := resource.Spec.SecretName
+	if secretName == "" {
+		secretName = defaultAuthKeySecretName(resource.Name)
+	}
+
+	currentID, err := parseOptionalID(resource.Status.KeyID)
+	if err != nil {
+		return r.fail(ctx, &resource, err)
+	}
+
+	remote, err := findRemoteAuthKey(ctx, ctrlClient, tailnetID, currentID)
+	if err != nil {
+		return r.fail(ctx, &resource, err)
+	}
+	secretReady := r.authKeySecretReady(ctx, resource.Namespace, secretName)
+	rotationRequested := resource.Status.IssuedRotationNonce != resource.Spec.RotationNonce
+	remoteExpired := remote != nil && remote.GetExpiresAt() != nil && !remote.GetExpiresAt().AsTime().After(time.Now())
+
+	if currentID == 0 || remote == nil || !secretReady || rotationRequested || remoteExpired {
+		reason := reasonAuthKeyIssuing
+		if currentID != 0 {
+			reason = reasonAuthKeyRotating
+		}
+		if err := r.setCondition(ctx, &resource, metav1.ConditionFalse, reason, "Issuing a replacement enrollment key"); err != nil {
+			return ctrl.Result{}, err
+		}
+		logger.Info("issuing auth key", "rotation", currentID != 0)
+		return r.issue(ctx, &resource, ctrlClient, tailnetID, currentID, secretName)
+	}
+
+	if err := r.setReady(ctx, &resource, remote, secretName); err != nil {
+		return ctrl.Result{}, err
+	}
 	return ctrl.Result{RequeueAfter: defaultAuthKeyRequeue}, nil
 }
 
-func (r *AuthKeyReconciler) ensureFinalizer(ctx context.Context, resource *kodiakv1alpha1.AuthKey) (ctrl.Result, error) {
-	if controllerutil.ContainsFinalizer(resource, kodiakFinalizer) {
-		return ctrl.Result{}, nil
+func (r *AuthKeyReconciler) controlClient() (controlclient.ControlServerClientInterface, error) {
+	factory := r.ClientFactory
+	if factory == nil {
+		factory = controlclient.DefaultClientFactory()
+	}
+	client, err := factory(r.IonscaleEndpoint, r.IonscaleAdminKey, r.IonscaleSkipTLS)
+	if err != nil {
+		return nil, fmt.Errorf("construct Ionscale client: %w", err)
+	}
+	return client, nil
+}
+
+func (r *AuthKeyReconciler) issue(
+	ctx context.Context,
+	resource *kodiakv1alpha1.AuthKey,
+	ctrlClient controlclient.ControlServerClientInterface,
+	tailnetID, oldID uint64,
+	secretName string,
+) (ctrl.Result, error) {
+	var expiry time.Duration
+	if resource.Spec.Expiry != nil {
+		expiry = resource.Spec.Expiry.Duration
 	}
 
-	controllerutil.AddFinalizer(resource, kodiakFinalizer)
-	if err := r.Update(ctx, resource); err != nil {
-		return ctrl.Result{}, fmt.Errorf("unable to add finalizer: %w", err)
+	remote, value, err := ctrlClient.CreateAuthKey(
+		ctx,
+		tailnetID,
+		resource.Spec.Ephemeral,
+		expiry,
+		append([]string(nil), resource.Spec.Tags...),
+		resource.Spec.PreAuthorized,
+	)
+	if err != nil {
+		return r.fail(ctx, resource, fmt.Errorf("create auth key: %w", err))
 	}
-	return ctrl.Result{Requeue: true}, nil
+
+	if err := r.writeSecret(ctx, resource, secretName, value); err != nil {
+		_ = ctrlClient.DeleteAuthKey(ctx, remote.GetId())
+		return r.fail(ctx, resource, fmt.Errorf("store auth key: %w", err))
+	}
+
+	original := resource.DeepCopy()
+	resource.Status.ObservedGeneration = resource.Generation
+	resource.Status.KeyID = strconv.FormatUint(remote.GetId(), 10)
+	resource.Status.SecretRef = &corev1.LocalObjectReference{Name: secretName}
+	resource.Status.CreatedAt = convertTimestamp(remote.GetCreatedAt())
+	resource.Status.ExpiresAt = convertTimestamp(remote.GetExpiresAt())
+	resource.Status.IssuedRotationNonce = resource.Spec.RotationNonce
+	if oldID != 0 && oldID != remote.GetId() {
+		resource.Status.RetiringKeyID = strconv.FormatUint(oldID, 10)
+	}
+	upsertCondition(&resource.Status.Conditions, metav1.Condition{
+		Type:               kodiakv1alpha1.AuthKeyConditionReady,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: resource.Generation,
+		LastTransitionTime: metav1.Now(),
+		Reason:             reasonAuthKeyReady,
+		Message:            "Enrollment key is ready",
+	})
+	if err := r.Status().Patch(ctx, resource, client.MergeFrom(original)); err != nil {
+		_ = ctrlClient.DeleteAuthKey(ctx, remote.GetId())
+		return ctrl.Result{}, err
+	}
+
+	if resource.Status.RetiringKeyID != "" {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	return ctrl.Result{RequeueAfter: defaultAuthKeyRequeue}, nil
 }
 
 func (r *AuthKeyReconciler) handleDeletion(ctx context.Context, resource *kodiakv1alpha1.AuthKey) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(resource, kodiakFinalizer) {
 		return ctrl.Result{}, nil
 	}
-
-	logger := log.FromContext(ctx).WithValues("authkey", resource.Name)
-
-	if resource.Status.KeyID != 0 && r.IonscaleEndpoint != "" && r.IonscaleAdminKey != "" {
-		clientFactory := r.ClientFactory
-		if clientFactory == nil {
-			clientFactory = controlclient.DefaultClientFactory()
-		}
-		ctrlClient, clientErr := clientFactory(r.IonscaleEndpoint, r.IonscaleAdminKey, r.IonscaleSkipTLS)
-		if clientErr != nil {
-			// If we can't create a client (e.g., DNS resolution failure), log warning and proceed
-			if isConnectUnavailable(clientErr) {
-				logger.Info("control server unavailable during auth key deletion, proceeding with resource cleanup", "error", clientErr)
-			} else {
-				logger.Error(clientErr, "failed to create control server client for deletion")
-			}
-		} else {
-			if err := ctrlClient.DeleteAuthKey(ctx, resource.Status.KeyID); err != nil {
-				if isConnectNotFound(err) {
-					// Already deleted on remote, proceed
-				} else if isConnectUnavailable(err) {
-					// Control server unreachable, log warning and proceed with resource cleanup
-					logger.Info("control server unavailable during auth key deletion, proceeding with resource cleanup", "error", err)
-				} else {
-					logger.Error(err, "failed to delete auth key on control server")
-					return ctrl.Result{RequeueAfter: rotationRetryRequeue}, nil
-				}
-			}
-		}
+	hasRemoteKeys := resource.Status.KeyID != "" || resource.Status.RetiringKeyID != ""
+	if hasRemoteKeys && (r.IonscaleEndpoint == "" || r.IonscaleAdminKey == "") {
+		return ctrl.Result{RequeueAfter: authKeyRetryRequeue}, nil
 	}
-
-	if resource.Spec.SecretName != "" {
-		_ = r.deleteSecretIfExists(ctx, resource.Namespace, resource.Spec.SecretName)
-	} else {
-		_ = r.deleteSecretIfExists(ctx, resource.Namespace, defaultAuthKeySecretName(resource.Name))
-	}
-
-	controllerutil.RemoveFinalizer(resource, kodiakFinalizer)
-	if err := r.Update(ctx, resource); err != nil {
-		return ctrl.Result{}, fmt.Errorf("unable to remove finalizer: %w", err)
-	}
-
-	return ctrl.Result{}, nil
-}
-
-func (r *AuthKeyReconciler) provisionNewAuthKey(ctx context.Context, resource *kodiakv1alpha1.AuthKey, client controlclient.ControlServerClientInterface, tailnetID uint64, secretName, specHash string) (ctrl.Result, error) {
-	var expiryDuration time.Duration
-	if resource.Spec.Expiry != "" {
-		parsed, err := time.ParseDuration(resource.Spec.Expiry)
+	if hasRemoteKeys {
+		ctrlClient, err := r.controlClient()
 		if err != nil {
-			if err := r.setErrorStatus(ctx, resource, reasonInvalidSpec, fmt.Errorf("invalid expiry duration: %w", err)); err != nil {
-				return ctrl.Result{}, err
+			return ctrl.Result{RequeueAfter: authKeyRetryRequeue}, nil
+		}
+		for _, raw := range []string{resource.Status.KeyID, resource.Status.RetiringKeyID} {
+			if err := deleteRemoteAuthKey(ctx, ctrlClient, raw); err != nil {
+				return ctrl.Result{RequeueAfter: authKeyRetryRequeue}, nil
 			}
-			return ctrl.Result{}, nil
 		}
-		expiryDuration = parsed
 	}
 
-	createdKey, value, err := client.CreateAuthKey(ctx, tailnetID, resource.Spec.Ephemeral, expiryDuration, append([]string(nil), resource.Spec.Tags...), resource.Spec.PreAuthorized)
-	if err != nil {
-		if err := r.setErrorStatus(ctx, resource, reasonAuthKeyError, err); err != nil {
+	secretName := resource.Spec.SecretName
+	if secretName == "" {
+		secretName = defaultAuthKeySecretName(resource.Name)
+	}
+	var secret corev1.Secret
+	if err := r.Get(ctx, types.NamespacedName{Namespace: resource.Namespace, Name: secretName}, &secret); err == nil {
+		if err := r.Delete(ctx, &secret); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
-	}
-
-	if err := r.createOrUpdateSecret(ctx, resource, secretName, value); err != nil {
-		if err := r.setErrorStatus(ctx, resource, reasonAuthKeyError, err); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: dependentNotReadyRequeue}, nil
-	}
-
-	if err := r.ensureSpecHashAnnotation(ctx, resource, specHash); err != nil {
+	} else if !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
 
-	if err := r.setReadyStatus(ctx, resource, createdKey, secretName, reasonAuthKeyCreated, "Auth key created on control server"); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	return ctrl.Result{RequeueAfter: defaultAuthKeyRequeue}, nil
+	original := resource.DeepCopy()
+	controllerutil.RemoveFinalizer(resource, kodiakFinalizer)
+	return ctrl.Result{}, r.Patch(ctx, resource, client.MergeFrom(original))
 }
 
-func (r *AuthKeyReconciler) findRemoteAuthKey(ctx context.Context, client controlclient.ControlServerClientInterface, tailnetID, keyID uint64) (*pb.AuthKey, error) {
-	keys, err := client.ListAuthKeys(ctx, tailnetID)
-	if err != nil {
-		return nil, err
+func (r *AuthKeyReconciler) authKeySecretReady(ctx context.Context, namespace, name string) bool {
+	var secret corev1.Secret
+	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &secret); err != nil {
+		return false
 	}
+	return len(secret.Data[authKeySecretDataKey]) != 0
+}
 
+func (r *AuthKeyReconciler) writeSecret(ctx context.Context, owner *kodiakv1alpha1.AuthKey, name, value string) error {
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: owner.Namespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		if err := controllerutil.SetControllerReference(owner, secret, r.Scheme); err != nil {
+			return err
+		}
+		secret.Type = corev1.SecretTypeOpaque
+		if secret.Data == nil {
+			secret.Data = map[string][]byte{}
+		}
+		secret.Data[authKeySecretDataKey] = []byte(strings.TrimSpace(value))
+		return nil
+	})
+	return err
+}
+
+func (r *AuthKeyReconciler) setReady(ctx context.Context, resource *kodiakv1alpha1.AuthKey, remote *pb.AuthKey, secretName string) error {
+	original := resource.DeepCopy()
+	resource.Status.ObservedGeneration = resource.Generation
+	resource.Status.SecretRef = &corev1.LocalObjectReference{Name: secretName}
+	resource.Status.CreatedAt = convertTimestamp(remote.GetCreatedAt())
+	resource.Status.ExpiresAt = convertTimestamp(remote.GetExpiresAt())
+	upsertCondition(&resource.Status.Conditions, metav1.Condition{
+		Type:               kodiakv1alpha1.AuthKeyConditionReady,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: resource.Generation,
+		LastTransitionTime: metav1.Now(),
+		Reason:             reasonAuthKeyReady,
+		Message:            "Enrollment key is ready",
+	})
+	if equality.Semantic.DeepEqual(original.Status, resource.Status) {
+		return nil
+	}
+	return r.Status().Patch(ctx, resource, client.MergeFrom(original))
+}
+
+func (r *AuthKeyReconciler) setCondition(ctx context.Context, resource *kodiakv1alpha1.AuthKey, status metav1.ConditionStatus, reason, message string) error {
+	original := resource.DeepCopy()
+	resource.Status.ObservedGeneration = resource.Generation
+	upsertCondition(&resource.Status.Conditions, metav1.Condition{
+		Type:               kodiakv1alpha1.AuthKeyConditionReady,
+		Status:             status,
+		ObservedGeneration: resource.Generation,
+		LastTransitionTime: metav1.Now(),
+		Reason:             reason,
+		Message:            message,
+	})
+	if equality.Semantic.DeepEqual(original.Status, resource.Status) {
+		return nil
+	}
+	return r.Status().Patch(ctx, resource, client.MergeFrom(original))
+}
+
+func (r *AuthKeyReconciler) notReady(
+	ctx context.Context,
+	resource *kodiakv1alpha1.AuthKey,
+	reason, message string,
+) (ctrl.Result, error) {
+	if err := r.setCondition(ctx, resource, metav1.ConditionFalse, reason, message); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: authKeyRetryRequeue}, nil
+}
+
+func (r *AuthKeyReconciler) fail(ctx context.Context, resource *kodiakv1alpha1.AuthKey, reconcileErr error) (ctrl.Result, error) {
+	if err := r.setCondition(ctx, resource, metav1.ConditionFalse, reasonAuthKeyError, reconcileErr.Error()); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: authKeyRetryRequeue}, nil
+}
+
+func findRemoteAuthKey(ctx context.Context, ctrlClient controlclient.ControlServerClientInterface, tailnetID, keyID uint64) (*pb.AuthKey, error) {
+	if keyID == 0 {
+		return nil, nil
+	}
+	keys, err := ctrlClient.ListAuthKeys(ctx, tailnetID)
+	if err != nil {
+		return nil, fmt.Errorf("list auth keys: %w", err)
+	}
 	for _, key := range keys {
 		if key.GetId() == keyID {
 			return key, nil
@@ -331,215 +354,64 @@ func (r *AuthKeyReconciler) findRemoteAuthKey(ctx context.Context, client contro
 	return nil, nil
 }
 
-func (r *AuthKeyReconciler) ensureAuthKeySecretPresent(ctx context.Context, resource *kodiakv1alpha1.AuthKey, secretName string) error {
-	secret := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: resource.Namespace}, secret); err != nil {
+func deleteRemoteAuthKey(ctx context.Context, ctrlClient controlclient.ControlServerClientInterface, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid auth key ID %q: %w", raw, err)
+	}
+	if err := ctrlClient.DeleteAuthKey(ctx, id); err != nil && !isConnectNotFound(err) {
 		return err
 	}
-
-	if len(secret.Data[authKeySecretDataKey]) == 0 {
-		return fmt.Errorf("secret %q missing key %q", secretName, authKeySecretDataKey)
-	}
-
 	return nil
 }
 
-func (r *AuthKeyReconciler) setReadyStatus(ctx context.Context, resource *kodiakv1alpha1.AuthKey, remote *pb.AuthKey, secretName, reason, message string) error {
-	current := resource.DeepCopy()
-
-	now := metav1.Now()
-	upsertCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               authKeyConditionReady,
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: resource.Generation,
-		LastTransitionTime: now,
-		Reason:             reason,
-		Message:            message,
-	})
-	resource.Status.Ready = true
-	resource.Status.Phase = phaseReady
-	resource.Status.KeyID = remote.GetId()
-	resource.Status.SecretRef = &corev1.LocalObjectReference{Name: secretName}
-	resource.Status.CreatedAt = convertTimestamp(remote.GetCreatedAt())
-	resource.Status.ExpiresAt = convertTimestamp(remote.GetExpiresAt())
-
-	if equality.Semantic.DeepEqual(current.Status, resource.Status) {
-		return nil
+func parseOptionalID(raw string) (uint64, error) {
+	if raw == "" {
+		return 0, nil
 	}
-	return r.Status().Update(ctx, resource)
-}
-
-func (r *AuthKeyReconciler) setPendingStatus(ctx context.Context, resource *kodiakv1alpha1.AuthKey, reason, message string) error {
-	current := resource.DeepCopy()
-
-	now := metav1.Now()
-	upsertCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               authKeyConditionReady,
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: resource.Generation,
-		LastTransitionTime: now,
-		Reason:             reason,
-		Message:            message,
-	})
-	resource.Status.Ready = false
-	resource.Status.Phase = phasePending
-
-	if equality.Semantic.DeepEqual(current.Status, resource.Status) {
-		return nil
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid remote ID %q: %w", raw, err)
 	}
-	return r.Status().Update(ctx, resource)
-}
-
-func (r *AuthKeyReconciler) setErrorStatus(ctx context.Context, resource *kodiakv1alpha1.AuthKey, reason string, reconcileErr error) error {
-	current := resource.DeepCopy()
-
-	message := reasonAuthKeyError
-	if reconcileErr != nil {
-		message = reconcileErr.Error()
-	}
-
-	now := metav1.Now()
-	upsertCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               authKeyConditionReady,
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: resource.Generation,
-		LastTransitionTime: now,
-		Reason:             reason,
-		Message:            message,
-	})
-	resource.Status.Ready = false
-	resource.Status.Phase = phaseError
-
-	if equality.Semantic.DeepEqual(current.Status, resource.Status) {
-		return nil
-	}
-	return r.Status().Update(ctx, resource)
-}
-
-func (r *AuthKeyReconciler) rotateAuthKey(ctx context.Context, resource *kodiakv1alpha1.AuthKey, client controlclient.ControlServerClientInterface, secretName, specHash string) error {
-	if resource.Status.KeyID != 0 {
-		if err := client.DeleteAuthKey(ctx, resource.Status.KeyID); err != nil && !isConnectNotFound(err) {
-			return fmt.Errorf("failed to delete existing auth key %d: %w", resource.Status.KeyID, err)
-		}
-	}
-
-	if err := r.deleteSecretIfExists(ctx, resource.Namespace, secretName); err != nil {
-		return err
-	}
-
-	if err := r.resetAuthKeyStatus(ctx, resource, reasonAuthKeyRotated, "Auth key rotated; provisioning a new key"); err != nil {
-		return err
-	}
-
-	if err := r.ensureSpecHashAnnotation(ctx, resource, specHash); err != nil {
-		return err
-	}
-
-	resource.Status.KeyID = 0
-
-	return nil
-}
-
-func (r *AuthKeyReconciler) resetAuthKeyStatus(ctx context.Context, resource *kodiakv1alpha1.AuthKey, reason, message string) error {
-	current := resource.DeepCopy()
-
-	now := metav1.Now()
-	upsertCondition(&resource.Status.Conditions, metav1.Condition{
-		Type:               authKeyConditionReady,
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: resource.Generation,
-		LastTransitionTime: now,
-		Reason:             reason,
-		Message:            message,
-	})
-	resource.Status.Ready = false
-	resource.Status.Phase = phasePending
-	resource.Status.KeyID = 0
-	resource.Status.SecretRef = nil
-	resource.Status.CreatedAt = nil
-	resource.Status.ExpiresAt = nil
-
-	if equality.Semantic.DeepEqual(current.Status, resource.Status) {
-		return nil
-	}
-	return r.Status().Update(ctx, resource)
-}
-
-func (r *AuthKeyReconciler) deleteSecretIfExists(ctx context.Context, namespace, name string) error {
-	secret := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-
-	return client.IgnoreNotFound(r.Delete(ctx, secret))
-}
-
-func (r *AuthKeyReconciler) createOrUpdateSecret(ctx context.Context, resource *kodiakv1alpha1.AuthKey, secretName, value string) error {
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: resource.Namespace,
-		},
-	}
-
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
-		if err := controllerutil.SetControllerReference(resource, secret, r.Scheme); err != nil {
-			return err
-		}
-		if secret.Data == nil {
-			secret.Data = map[string][]byte{}
-		}
-		secret.Type = corev1.SecretTypeOpaque
-		secret.Data[authKeySecretDataKey] = []byte(strings.TrimSpace(value))
-		return nil
-	})
-	return err
-}
-
-func (r *AuthKeyReconciler) ensureSpecHashAnnotation(ctx context.Context, resource *kodiakv1alpha1.AuthKey, hash string) error {
-	if resource.Annotations != nil && resource.Annotations[authKeySpecHashAnnotation] == hash {
-		return nil
-	}
-
-	original := resource.DeepCopy()
-	if resource.Annotations == nil {
-		resource.Annotations = map[string]string{}
-	}
-	resource.Annotations[authKeySpecHashAnnotation] = hash
-	return r.Patch(ctx, resource, client.MergeFrom(original))
-}
-
-func hashAuthKeySpec(spec kodiakv1alpha1.AuthKeySpec) string {
-	tags := append([]string(nil), spec.Tags...)
-	sort.Strings(tags)
-	data := fmt.Sprintf("%s|%t|%s|%t|%s|%v", spec.TailnetRef.Name, spec.Ephemeral, spec.Expiry, spec.PreAuthorized, spec.SecretName, tags)
-	sum := sha256.Sum256([]byte(data))
-	return hex.EncodeToString(sum[:])
+	return id, nil
 }
 
 func defaultAuthKeySecretName(name string) string {
-	return fmt.Sprintf("authkey-%s", name)
+	return "authkey-" + name
 }
 
 func convertTimestamp(ts *timestamppb.Timestamp) *metav1.Time {
 	if ts == nil {
 		return nil
 	}
-	timeValue := ts.AsTime()
-	if timeValue.IsZero() {
+	value := ts.AsTime()
+	if value.IsZero() {
 		return nil
 	}
-	result := metav1.NewTime(timeValue)
+	result := metav1.NewTime(value)
 	return &result
+}
+
+func ensureFinalizer(ctx context.Context, kubeClient client.Client, resource client.Object) (ctrl.Result, error) {
+	if controllerutil.ContainsFinalizer(resource, kodiakFinalizer) {
+		return ctrl.Result{}, nil
+	}
+	original := resource.DeepCopyObject().(client.Object)
+	controllerutil.AddFinalizer(resource, kodiakFinalizer)
+	if err := kubeClient.Patch(ctx, resource, client.MergeFrom(original)); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{Requeue: true}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *AuthKeyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kodiakv1alpha1.AuthKey{}).
+		Owns(&corev1.Secret{}).
 		Named("authkey").
 		Complete(r)
 }
