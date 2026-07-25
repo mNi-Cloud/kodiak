@@ -37,7 +37,7 @@ data:
       {{- end }}
 
     keys:
-      system_admin_key: ""
+      system_admin_key: "${IONSCALE_KEYS_SYSTEM_ADMIN_KEY}"
 
     derp:
       server:

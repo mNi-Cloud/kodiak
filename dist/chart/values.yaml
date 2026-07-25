@@ -28,8 +28,8 @@ tailscale:
 ionscale:
   enabled: true
   image:
-    repository: ghcr.io/jsiebens/ionscale
-    tag: "0.15.0"
+    repository: ghcr.io/mni-cloud/ionscale
+    tag: "0.18.1-mni.1"
     pullPolicy: IfNotPresent
   replicas: 1
   adminKey: ""
