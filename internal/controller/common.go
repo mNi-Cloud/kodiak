@@ -37,7 +37,8 @@ func upsertCondition(conditions *[]metav1.Condition, condition metav1.Condition)
 
 		if (*conditions)[i].Status == condition.Status &&
 			(*conditions)[i].Reason == condition.Reason &&
-			(*conditions)[i].Message == condition.Message {
+			(*conditions)[i].Message == condition.Message &&
+			(*conditions)[i].ObservedGeneration == condition.ObservedGeneration {
 			return
 		}
 
