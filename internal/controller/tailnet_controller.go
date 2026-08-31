@@ -27,6 +27,7 @@ import (
 	controlclient "github.com/mNi-Cloud/kodiak/internal/client"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -59,6 +60,7 @@ type TailnetReconciler struct {
 	IonscaleLoginURL string
 	IonscaleAdminKey string
 	IonscaleSkipTLS  bool
+	now              func() time.Time
 }
 
 func (r *TailnetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -89,6 +91,11 @@ func (r *TailnetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: missingDependencyRequeue}, nil
 	}
 
+	now := r.currentTime()
+	if remaining, synced := tailnetSyncRemaining(&tailnet, now); synced {
+		return ctrl.Result{RequeueAfter: remaining}, nil
+	}
+
 	clientFactory := r.ClientFactory
 	if clientFactory == nil {
 		clientFactory = controlclient.DefaultClientFactory()
@@ -117,11 +124,37 @@ func (r *TailnetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		machineCount = defaultMachineListFallbackCount
 	}
 
-	if err := r.setReadyStatus(ctx, &tailnet, remoteTailnet.GetId(), machineCount, syncReason, syncMessage); err != nil {
+	if err := r.setReadyStatus(ctx, &tailnet, remoteTailnet.GetId(), machineCount, syncReason, syncMessage, r.currentTime()); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{RequeueAfter: defaultTailnetRequeue}, nil
+}
+
+func (r *TailnetReconciler) currentTime() time.Time {
+	if r.now != nil {
+		return r.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func tailnetSyncRemaining(resource *kodiakv1alpha1.Tailnet, now time.Time) (time.Duration, bool) {
+	condition := meta.FindStatusCondition(resource.Status.Conditions, kodiakv1alpha1.TailnetConditionReady)
+	if resource.Status.ObservedGeneration != resource.Generation ||
+		condition == nil || condition.Status != metav1.ConditionTrue ||
+		condition.ObservedGeneration != resource.Generation ||
+		resource.Status.LastSyncTime == nil {
+		return 0, false
+	}
+
+	elapsed := now.Sub(resource.Status.LastSyncTime.Time)
+	if elapsed >= defaultTailnetRequeue {
+		return 0, false
+	}
+	if elapsed < 0 {
+		return defaultTailnetRequeue, true
+	}
+	return defaultTailnetRequeue - elapsed, true
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -298,15 +331,14 @@ func (r *TailnetReconciler) fetchMachineCount(ctx context.Context, client contro
 	return int32(len(machines)), nil
 }
 
-func (r *TailnetReconciler) setReadyStatus(ctx context.Context, resource *kodiakv1alpha1.Tailnet, tailnetID uint64, machineCount int32, reason, message string) error {
+func (r *TailnetReconciler) setReadyStatus(ctx context.Context, resource *kodiakv1alpha1.Tailnet, tailnetID uint64, machineCount int32, reason, message string, now time.Time) error {
 	current := resource.DeepCopy()
 
-	now := metav1.Now()
 	upsertCondition(&resource.Status.Conditions, metav1.Condition{
 		Type:               kodiakv1alpha1.TailnetConditionReady,
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: resource.Generation,
-		LastTransitionTime: now,
+		LastTransitionTime: metav1.NewTime(now),
 		Reason:             reason,
 		Message:            message,
 	})
@@ -314,7 +346,7 @@ func (r *TailnetReconciler) setReadyStatus(ctx context.Context, resource *kodiak
 	resource.Status.TailnetID = strconv.FormatUint(tailnetID, 10)
 	resource.Status.LoginURL = r.IonscaleLoginURL
 	resource.Status.MachineCount = machineCount
-	syncTime := metav1.NewTime(time.Now().UTC())
+	syncTime := metav1.NewTime(now.UTC())
 	resource.Status.LastSyncTime = &syncTime
 
 	if equality.Semantic.DeepEqual(current.Status, resource.Status) {

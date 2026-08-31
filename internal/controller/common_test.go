@@ -7,7 +7,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestUpsertConditionRefreshesObservedGeneration(t *testing.T) {
+func TestUpsertConditionRefreshesFieldsWithoutTransition(t *testing.T) {
 	oldTransitionTime := metav1.NewTime(time.Unix(1, 0))
 	newTransitionTime := metav1.NewTime(time.Unix(2, 0))
 	conditions := []metav1.Condition{
@@ -24,8 +24,8 @@ func TestUpsertConditionRefreshesObservedGeneration(t *testing.T) {
 	upsertCondition(&conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionTrue,
-		Reason:             "ResourceUpdated",
-		Message:            "resource updated",
+		Reason:             "ResourceSynced",
+		Message:            "resource synced",
 		ObservedGeneration: 2,
 		LastTransitionTime: newTransitionTime,
 	})
@@ -33,6 +33,34 @@ func TestUpsertConditionRefreshesObservedGeneration(t *testing.T) {
 	if got := conditions[0].ObservedGeneration; got != 2 {
 		t.Fatalf("ObservedGeneration = %d, want 2", got)
 	}
+	if got := conditions[0].Reason; got != "ResourceSynced" {
+		t.Fatalf("Reason = %q, want ResourceSynced", got)
+	}
+	if got := conditions[0].Message; got != "resource synced" {
+		t.Fatalf("Message = %q, want resource synced", got)
+	}
+	if got := conditions[0].LastTransitionTime; !got.Equal(&oldTransitionTime) {
+		t.Fatalf("LastTransitionTime = %s, want %s", got, oldTransitionTime)
+	}
+}
+
+func TestUpsertConditionUpdatesTransitionTimeWhenStatusChanges(t *testing.T) {
+	oldTransitionTime := metav1.NewTime(time.Unix(1, 0))
+	newTransitionTime := metav1.NewTime(time.Unix(2, 0))
+	conditions := []metav1.Condition{{
+		Type:               "Ready",
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: 1,
+		LastTransitionTime: oldTransitionTime,
+	}}
+
+	upsertCondition(&conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: 2,
+		LastTransitionTime: newTransitionTime,
+	})
+
 	if got := conditions[0].LastTransitionTime; !got.Equal(&newTransitionTime) {
 		t.Fatalf("LastTransitionTime = %s, want %s", got, newTransitionTime)
 	}
