@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/bufbuild/connect-go"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -26,25 +27,5 @@ func isConnectNotFound(err error) bool {
 }
 
 func upsertCondition(conditions *[]metav1.Condition, condition metav1.Condition) {
-	if conditions == nil {
-		return
-	}
-
-	for i := range *conditions {
-		if (*conditions)[i].Type != condition.Type {
-			continue
-		}
-
-		if (*conditions)[i].Status == condition.Status &&
-			(*conditions)[i].Reason == condition.Reason &&
-			(*conditions)[i].Message == condition.Message &&
-			(*conditions)[i].ObservedGeneration == condition.ObservedGeneration {
-			return
-		}
-
-		(*conditions)[i] = condition
-		return
-	}
-
-	*conditions = append(*conditions, condition)
+	meta.SetStatusCondition(conditions, condition)
 }
